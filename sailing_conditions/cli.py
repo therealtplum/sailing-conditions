@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-import argparse, calendar
+import argparse
+import calendar
+import sys
 from datetime import date, timedelta
 from typing import List
 from .cities import CITIES
@@ -40,11 +42,23 @@ SEVERE_WORDS = {"hazard", "warning", "gale", "storm", "hurricane", "hvy freezing
 
 
 def _is_rainy(sky: str | None) -> bool:
+    """Check if sky description indicates rain."""
     return bool(sky) and any(k in sky.lower() for k in RAINY_WORDS)
 
 
 def pick_suggestion(city_label: str, sky: str | None) -> str:
-    import os, random
+    """
+    Pick an activity suggestion based on weather conditions.
+    
+    Args:
+        city_label: City name
+        sky: Sky/weather description
+    
+    Returns:
+        Activity suggestion string
+    """
+    import os
+    import random
 
     stable = os.environ.get("SUGGESTION_MODE", "").lower() == "stable"
     rng = random.Random(f"{city_label}-{date.today().isoformat()}") if stable else random.SystemRandom()
@@ -59,6 +73,15 @@ def pick_suggestion(city_label: str, sky: str | None) -> str:
 
 
 def in_season(d: date) -> bool:
+    """
+    Check if a date falls within the Chicago sailing season (Memorial Day to Labor Day).
+    
+    Args:
+        d: Date to check
+    
+    Returns:
+        True if date is in season, False otherwise
+    """
     last_may_day = max(day for day in range(31, 24, -1) if date(d.year, 5, day).weekday() == calendar.MONDAY)
     memorial_day = date(d.year, 5, last_may_day)
     first_sept_monday = next(day for day in range(1, 8) if date(d.year, 9, day).weekday() == calendar.MONDAY)
@@ -67,10 +90,33 @@ def in_season(d: date) -> bool:
 
 
 def _resolve_city_selection(args, unknown: List[str]) -> List[str]:
+    """
+    Resolve which cities to include based on command-line arguments.
+    
+    Priority order:
+    1. --only flag (comma-separated list)
+    2. Unknown flags like --miami or legacy flags like --chicago
+    3. --all-cities flag
+    4. Default cities
+    
+    Args:
+        args: Parsed command-line arguments
+        unknown: List of unknown arguments
+    
+    Returns:
+        List of city keys to process
+    """
     # Priority: --only > unknown --<key> flags & legacy flags > --all-cities > default
     if args.only:
         sel = [k.strip().lower() for k in args.only.split(",") if k.strip()]
-        return [k for k in sel if k in CITIES] or DEFAULT_KEYS.copy()
+        valid_cities = [k for k in sel if k in CITIES]
+        if valid_cities:
+            return valid_cities
+        # If no valid cities found, warn and use defaults
+        invalid = [k for k in sel if k not in CITIES]
+        if invalid:
+            print(f"[warn] Invalid city keys ignored: {', '.join(invalid)}", file=sys.stderr)
+        return DEFAULT_KEYS.copy()
 
     # unknown flags like --miami
     unk_keys = []
@@ -100,8 +146,24 @@ def _resolve_city_selection(args, unknown: List[str]) -> List[str]:
     return DEFAULT_KEYS.copy()
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Multi-city Sailing Quick Hits (refactored)")
+def main() -> int:
+    """
+    Main CLI entry point for sailing conditions forecast tool.
+    
+    Returns:
+        Exit code (0 for success, non-zero for errors)
+    """
+    parser = argparse.ArgumentParser(
+        description="Multi-city Sailing Quick Hits (refactored)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s --today --only chicago --slack
+  %(prog)s --tomorrow --all-cities --email
+  %(prog)s --weekend --miami --nyc
+  %(prog)s --all
+        """
+    )
 
     # Day (mutually exclusive)
     day = parser.add_mutually_exclusive_group()
@@ -165,6 +227,10 @@ def main():
     # Build entries
     entries = []
     for key in sel:
+        if key not in CITIES:
+            print(f"[warn] Skipping invalid city key: {key}", file=sys.stderr)
+            continue
+        
         # Choose concrete "today" label that actually exists for marine products
         if labels == ["REST OF TODAY", "TODAY"]:
             if CITIES[key]["type"] == "marine":
@@ -177,15 +243,19 @@ def main():
             entries_labels = labels
 
         for lab in entries_labels:
-            meta = CITIES[key]
-            if key == "chicago":
-                e = chicago_forecast(lab)
-            else:
-                if meta["type"] == "marine":
-                    e = marine_city_forecast(key, lab)
+            try:
+                meta = CITIES[key]
+                if key == "chicago":
+                    e = chicago_forecast(lab)
                 else:
-                    e = grid_city_forecast(key, lab)
-            entries.append(e)
+                    if meta["type"] == "marine":
+                        e = marine_city_forecast(key, lab)
+                    else:
+                        e = grid_city_forecast(key, lab)
+                entries.append(e)
+            except Exception as ex:
+                print(f"[warn] Failed to fetch forecast for {key} ({lab}): {ex}", file=sys.stderr)
+                # Continue with other cities even if one fails
 
     # Slack text
     lines = [
@@ -204,24 +274,42 @@ def main():
     ]
     slack_text = "\n".join(lines) if lines else "No data."
 
-    # Email
+    # Email - cross-platform date formatting
     try:
+        # Try Unix-style format first (%-d removes leading zero)
         date_str = today_dt.strftime("%a %b %-d, %Y")
-    except Exception:
-        date_str = today_dt.strftime("%a %b %d, %Y")
+    except ValueError:
+        # Windows doesn't support %-d, use %#d or fallback to %d
+        try:
+            date_str = today_dt.strftime("%a %b %#d, %Y")
+        except ValueError:
+            # Final fallback: use %d (may have leading zero)
+            date_str = today_dt.strftime("%a %b %d, %Y")
     subject = "Sailing Quick Hits — Multi-City"
     text_fallback = "\n".join(f"{e['prefix']} {e['city']} — {e['quick']}" for e in entries)
     html = build_email_html(entries, date_str)
 
     # Send
+    errors = []
     if send_email_flag:
-        send_email_html(subject, html, text_fallback)
+        try:
+            send_email_html(subject, html, text_fallback)
+        except Exception as e:
+            errors.append(f"Email send failed: {e}")
+            print(f"[error] Email send failed: {e}", file=sys.stderr)
+    
     if send_slack_flag:
-        post_slack(slack_text)
+        try:
+            post_slack(slack_text)
+        except Exception as e:
+            errors.append(f"Slack send failed: {e}")
+            print(f"[error] Slack send failed: {e}", file=sys.stderr)
 
     # Print once
     print(text_fallback)
-    return 0
+    
+    # Return non-zero exit code if there were errors
+    return 1 if errors else 0
 
 
 if __name__ == "__main__":

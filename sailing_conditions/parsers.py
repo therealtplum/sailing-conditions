@@ -47,6 +47,15 @@ SEA_STATE_KEYS = tuple(sorted(SEA_STATE_MAP.keys(), key=len, reverse=True))
 
 
 def parse_wind(text: str) -> Tuple[Optional[str], Optional[Tuple[int, int]]]:
+    """
+    Parse wind direction and speed from text.
+    
+    Args:
+        text: Text containing wind information
+    
+    Returns:
+        Tuple of (direction, (low_speed, high_speed)) in knots, or (None, None) if not found
+    """
     dm = DIR_RE.search(text or "")
     wdir = dm.group(0).upper() if dm else None
     sp = WIND_RE.search(text or "")
@@ -60,6 +69,15 @@ def parse_wind(text: str) -> Tuple[Optional[str], Optional[Tuple[int, int]]]:
 
 
 def parse_waves(text: str) -> Optional[Tuple[float, float]]:
+    """
+    Parse wave height from text.
+    
+    Args:
+        text: Text containing wave/sea information
+    
+    Returns:
+        Tuple of (low_height, high_height) in feet, or None if not found
+    """
     if not text:
         return None
     m = WAVE_RE.search(text)
@@ -83,11 +101,31 @@ def parse_waves(text: str) -> Optional[Tuple[float, float]]:
 
 
 def parse_sky(text: str) -> Optional[str]:
+    """
+    Parse sky/weather conditions from text.
+    
+    Args:
+        text: Text containing sky/weather description
+    
+    Returns:
+        Sky condition string (lowercase), or None if not found
+    """
     m = SKY_RE.search(text or "")
     return m.group(0).lower() if m else None
 
 
-def compute_rating(wind_kts, waves_ft, sky: Optional[str]) -> int:
+def compute_rating(wind_kts: Optional[Tuple[int, int]], waves_ft: Optional[Tuple[float, float]], sky: Optional[str]) -> int:
+    """
+    Compute a 1-10 sailing condition rating based on wind, waves, and sky conditions.
+    
+    Args:
+        wind_kts: Wind speed range in knots (low, high)
+        waves_ft: Wave height range in feet (low, high)
+        sky: Sky/weather description
+    
+    Returns:
+        Rating from 1 (poor) to 10 (excellent)
+    """
     # If we truly have nothing, stay neutral
     if wind_kts is None and waves_ft is None and not sky:
         return 5
@@ -129,12 +167,31 @@ def compute_rating(wind_kts, waves_ft, sky: Optional[str]) -> int:
 
 
 def normalize_heading(h: str) -> str:
+    """
+    Normalize a heading string by removing extra whitespace and uppercasing.
+    
+    Args:
+        h: Heading string to normalize
+    
+    Returns:
+        Normalized heading string
+    """
     import re as _re
 
     return _re.sub(r"\s+", " ", (h or "").strip().upper())
 
 
-def extract_day_blurb(full_text: str, day_heading: str):
+def extract_day_blurb(full_text: str, day_heading: str) -> Optional[str]:
+    """
+    Extract a section of text for a specific day heading from marine forecast text.
+    
+    Args:
+        full_text: Full marine forecast text
+        day_heading: Day heading to extract (e.g., "TODAY", "TOMORROW")
+    
+    Returns:
+        Extracted text section, or None if not found
+    """
     import re as _re
 
     txt = (full_text or "").replace("\r", "")
@@ -145,6 +202,15 @@ def extract_day_blurb(full_text: str, day_heading: str):
 
 
 def extract_today_blurb(full_text: str) -> str:
+    """
+    Extract today's forecast section from marine text, trying multiple heading formats.
+    
+    Args:
+        full_text: Full marine forecast text
+    
+    Returns:
+        Today's forecast section, or first paragraph if no specific heading found
+    """
     for c in [
         "REST OF TODAY",
         "TODAY",
