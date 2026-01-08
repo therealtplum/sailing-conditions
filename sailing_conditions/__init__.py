@@ -1,51 +1,55 @@
-"""
-sailing-conditions: Quick sailing condition summaries across multiple cities.
-
-This package provides tools for fetching and analyzing sailing conditions
-from the National Weather Service (NWS) API.
-
-Example usage:
-    from sailing_conditions import chicago_forecast, marine_city_forecast
-    
-    forecast = chicago_forecast("TODAY")
-    print(forecast["rating"])  # 1-10 rating
-"""
+"""sailing_conditions – multi-city sailing forecast CLI."""
 from __future__ import annotations
 
+from .cities import CITIES
+from .cli import main
+from .emoji import pick_weather_emoji
 from .forecast import (
     chicago_forecast,
-    marine_city_forecast,
+    find_best_sailing_window,
     grid_city_forecast,
+    marine_city_forecast,
+    week_forecast,
 )
-from .parsers import (
-    parse_wind,
-    parse_waves,
-    parse_sky,
-    compute_rating,
+from .formatters import (
+    build_email_html,
+    format_json_output,
+    format_slack_line_city,
+    format_verbose_entry,
+    format_week_summary,
 )
-from .fetchers import (
-    fetch_grid_periods,
-    fetch_city_marine_text,
-)
-from .cities import CITIES
-from .config import DEFAULT_KEYS
+from .parsers import compute_rating, compute_rating_breakdown, parse_sky, parse_waves, parse_wind
+from .senders import post_slack, send_email_html
+from .alerts import add_alert, check_alerts, list_alerts, remove_alert
 
 __all__ = [
+    "CITIES",
+    "main",
     # Forecast functions
     "chicago_forecast",
     "marine_city_forecast",
     "grid_city_forecast",
+    "week_forecast",
+    "find_best_sailing_window",
     # Parsers
     "parse_wind",
     "parse_waves",
     "parse_sky",
     "compute_rating",
-    # Fetchers
-    "fetch_grid_periods",
-    "fetch_city_marine_text",
-    # Data
-    "CITIES",
-    "DEFAULT_KEYS",
+    "compute_rating_breakdown",
+    # Formatting
+    "pick_weather_emoji",
+    "format_slack_line_city",
+    "format_json_output",
+    "format_verbose_entry",
+    "format_week_summary",
+    "build_email_html",
+    # Senders
+    "post_slack",
+    "send_email_html",
+    # Alerts
+    "add_alert",
+    "remove_alert",
+    "list_alerts",
+    "check_alerts",
 ]
-
-__version__ = "0.1.0"

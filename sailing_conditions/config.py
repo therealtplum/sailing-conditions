@@ -51,8 +51,30 @@ WIND_OPTIMAL_LOW = 9
 WIND_OPTIMAL_HIGH = 18
 WIND_DANGEROUS_HIGH = 28
 WIND_VERY_HIGH = 23
+WIND_HIGH = 18
+WIND_TOO_LOW = 5
+WIND_LIGHT = 9
 
 # Waves: optimal range is 1-3 feet
 WAVE_OPTIMAL_HIGH = 3.0
 WAVE_DANGEROUS_HIGH = 5.0
 WAVE_VERY_HIGH = 4.0
+
+# --------------------
+# Alerts Configuration
+# --------------------
+ALERTS_FILE = os.environ.get(
+    "SAILING_CONDITIONS_ALERTS_FILE",
+    os.path.expanduser("~/.sailing-conditions-alerts.json")
+)
+
+# --------------------
+# Output Formats
+# --------------------
+OUTPUT_FORMATS = ["text", "json"]
+DEFAULT_OUTPUT_FORMAT = "text"
+
+# --------------------
+# Day Labels
+# --------------------
+WEEKDAYS = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]

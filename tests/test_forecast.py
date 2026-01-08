@@ -191,6 +191,7 @@ class TestPack:
         """Test basic packing."""
         result = _pack(
             city="Chicago",
+            city_key="chicago",
             label="TODAY",
             rating=8,
             wind="N 10–15 kt",
@@ -202,6 +203,7 @@ class TestPack:
         )
 
         assert result["city"] == "Chicago"
+        assert result["city_key"] == "chicago"
         assert result["label"] == "Today"  # Should be title-cased
         assert result["rating"] == 8
         assert result["wind_line"] == "N 10–15 kt"
@@ -212,10 +214,10 @@ class TestPack:
 
     def test_label_title_casing(self):
         """Test that label is title-cased."""
-        result = _pack("City", "TOMORROW", 5, "—", "—", "—", False, "quick", "☀")
+        result = _pack("City", "test_city", "TOMORROW", 5, "—", "—", "—", False, "quick", "☀")
         assert result["label"] == "Tomorrow"
 
-        result = _pack("City", "saturday", 5, "—", "—", "—", False, "quick", "☀")
+        result = _pack("City", "test_city", "saturday", 5, "—", "—", "—", False, "quick", "☀")
         assert result["label"] == "Saturday"
 
 

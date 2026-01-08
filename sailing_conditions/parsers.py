@@ -141,9 +141,52 @@ def compute_rating(
     Returns:
         Rating from 1 (poor) to 10 (excellent)
     """
+    breakdown = compute_rating_breakdown(wind_kts, waves_ft, sky)
+    return breakdown["final"]
+
+
+def compute_rating_breakdown(
+    wind_kts: Optional[Tuple[int, int]],
+    waves_ft: Optional[Tuple[float, float]],
+    sky: Optional[str],
+) -> dict:
+    """
+    Compute a detailed breakdown of the sailing condition rating.
+
+    Args:
+        wind_kts: Wind speed range in knots (low, high)
+        waves_ft: Wave height range in feet (low, high)
+        sky: Sky/weather description
+
+    Returns:
+        Dictionary with:
+        - base: Starting score (10)
+        - wind_adj: Wind adjustment and reason
+        - wave_adj: Wave adjustment and reason
+        - sky_adj: Sky adjustment and reason
+        - raw: Score before clamping
+        - final: Final rating (1-10)
+    """
+    breakdown = {
+        "base": 10,
+        "wind_adj": 0,
+        "wind_reason": None,
+        "wave_adj": 0,
+        "wave_reason": None,
+        "sky_adj": 0,
+        "sky_reason": None,
+        "raw": 10,
+        "final": 5,
+    }
+
     # If we truly have nothing, stay neutral
     if wind_kts is None and waves_ft is None and not sky:
-        return 5
+        breakdown["raw"] = 5
+        breakdown["final"] = 5
+        breakdown["wind_reason"] = "no data"
+        breakdown["wave_reason"] = "no data"
+        breakdown["sky_reason"] = "no data"
+        return breakdown
 
     score = 10
 
@@ -151,37 +194,83 @@ def compute_rating(
     if waves_ft:
         hi = max(waves_ft)
         if hi > 5:
+            breakdown["wave_adj"] = -6
+            breakdown["wave_reason"] = f"dangerous ({hi}ft > 5ft)"
             score -= 6
         elif hi > 4:
+            breakdown["wave_adj"] = -4
+            breakdown["wave_reason"] = f"very high ({hi}ft > 4ft)"
             score -= 4
         elif hi > 3:
+            breakdown["wave_adj"] = -2
+            breakdown["wave_reason"] = f"high ({hi}ft > 3ft)"
             score -= 2
+        else:
+            breakdown["wave_reason"] = f"optimal ({hi}ft ≤ 3ft)"
+    else:
+        breakdown["wave_reason"] = "no wave data"
 
     # Wind penalty/bonus
     if wind_kts:
         lo, hi = wind_kts
+        wind_adj = 0
+        reasons = []
+
         if hi >= 28:
-            score -= 6
+            wind_adj -= 6
+            reasons.append(f"dangerous ({hi}kt ≥ 28kt)")
         elif hi >= 23:
-            score -= 4
+            wind_adj -= 4
+            reasons.append(f"very high ({hi}kt ≥ 23kt)")
         elif hi >= 18:
-            score -= 2
+            wind_adj -= 2
+            reasons.append(f"high ({hi}kt ≥ 18kt)")
+        else:
+            reasons.append(f"good max ({hi}kt < 18kt)")
+
         if lo < 5:
-            score -= 2
+            wind_adj -= 2
+            reasons.append(f"too light ({lo}kt < 5kt)")
         elif lo < 9:
-            score -= 1
+            wind_adj -= 1
+            reasons.append(f"light ({lo}kt < 9kt)")
+        else:
+            reasons.append(f"good min ({lo}kt ≥ 9kt)")
+
+        breakdown["wind_adj"] = wind_adj
+        breakdown["wind_reason"] = "; ".join(reasons)
+        score += wind_adj
+    else:
+        breakdown["wind_reason"] = "no wind data"
 
     # Sky bonus/penalty
     if sky:
         s = sky.lower()
-        if "sunny" in s or "clear" in s:
-            score += 1
-        if "storm" in s or "thunder" in s:
-            score -= 5
-        if "showers" in s or "rain" in s:
-            score -= 2
+        sky_adj = 0
+        reasons = []
 
-    return max(1, min(10, score))
+        if "sunny" in s or "clear" in s:
+            sky_adj += 1
+            reasons.append("sunny/clear (+1)")
+        if "storm" in s or "thunder" in s:
+            sky_adj -= 5
+            reasons.append("storm/thunder (-5)")
+        if "showers" in s or "rain" in s:
+            sky_adj -= 2
+            reasons.append("showers/rain (-2)")
+
+        if not reasons:
+            reasons.append(f"neutral ({sky})")
+
+        breakdown["sky_adj"] = sky_adj
+        breakdown["sky_reason"] = "; ".join(reasons)
+        score += sky_adj
+    else:
+        breakdown["sky_reason"] = "no sky data"
+
+    breakdown["raw"] = score
+    breakdown["final"] = max(1, min(10, score))
+    return breakdown
 
 
 def normalize_heading(h: str) -> str:

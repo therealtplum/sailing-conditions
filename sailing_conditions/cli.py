@@ -10,16 +10,25 @@ import sys
 from datetime import date, timedelta
 from typing import List
 
+from .alerts import add_alert, check_alerts, format_alerts_list, list_alerts, remove_alert
 from .cities import CITIES
 from .config import DEFAULT_KEYS, RAINY_WORDS, SEVERE_WORDS
 from .fetchers import fetch_city_marine_text
 from .forecast import (
     chicago_forecast,
+    find_best_sailing_window,
     grid_city_forecast,
     marine_city_forecast,
+    week_forecast,
     _pick_present_day_label,
 )
-from .formatters import build_email_html, format_slack_line_city
+from .formatters import (
+    build_email_html,
+    format_json_output,
+    format_slack_line_city,
+    format_verbose_entry,
+    format_week_summary,
+)
 from .senders import post_slack, send_email_html
 
 # Suggestions for non-sailing cities
@@ -158,28 +167,43 @@ def main() -> int:
         Exit code (0 for success, non-zero for errors)
     """
     parser = argparse.ArgumentParser(
-        description="Multi-city Sailing Quick Hits (refactored)",
+        description="Multi-city Sailing Quick Hits",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   %(prog)s --today --only chicago --slack
   %(prog)s --tomorrow --all-cities --email
   %(prog)s --weekend --miami --nyc
+  %(prog)s --week --chicago --format json
+  %(prog)s --today --chicago --verbose
+  %(prog)s --alert-add --city chicago --min-rating 8
+  %(prog)s --alert-list
   %(prog)s --all
         """,
     )
 
-    # Day (mutually exclusive)
+    # Day selection (mutually exclusive)
     day = parser.add_mutually_exclusive_group()
     day.add_argument("--today", action="store_true", help="Use today's forecast (default)")
     day.add_argument("--tomorrow", action="store_true", help="Use tomorrow's forecast")
     day.add_argument("--weekend", action="store_true", help="Use Saturday & Sunday")
+    day.add_argument("--week", action="store_true", help="Show 7-day forecast")
+
+    # Output format
+    parser.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format (default: text)",
+    )
+    parser.add_argument("--verbose", "-v", action="store_true", help="Show detailed rating breakdown")
 
     # Delivery (independent)
     parser.add_argument("--email", action="store_true", help="Send to Email")
     parser.add_argument("--slack", action="store_true", help="Send to Slack")
     parser.add_argument("--all-delivery", action="store_true", help="Send to both Email and Slack")
     parser.add_argument("--all", action="store_true", help="Alias for both --all-cities and --all-delivery")
+    parser.add_argument("--no-send", action="store_true", help="Don't send, just print output")
 
     # City selection
     parser.add_argument("--all-cities", action="store_true", help="Include every city in CITIES")
@@ -190,17 +214,61 @@ Examples:
     parser.add_argument("--kc", action="store_true")
     parser.add_argument("--slc", action="store_true")
 
+    # Alert management
+    alert_group = parser.add_argument_group("Alert Management")
+    alert_group.add_argument("--alert-add", action="store_true", help="Add a new alert")
+    alert_group.add_argument("--alert-remove", type=str, metavar="ID", help="Remove an alert by ID")
+    alert_group.add_argument("--alert-list", action="store_true", help="List all alerts")
+    alert_group.add_argument("--alert-check", action="store_true", help="Check alerts against current conditions")
+    alert_group.add_argument("--city", type=str, help="City key for alert (with --alert-add)")
+    alert_group.add_argument("--min-rating", type=int, default=7, help="Minimum rating for alert (default: 7)")
+
     args, unknown = parser.parse_known_args()
+
+    # Handle alert commands
+    if args.alert_list:
+        alerts = list_alerts()
+        print(format_alerts_list(alerts))
+        return 0
+
+    if args.alert_add:
+        if not args.city:
+            print("[error] --city required with --alert-add", file=sys.stderr)
+            return 1
+        if args.city not in CITIES:
+            print(f"[error] Invalid city key: {args.city}", file=sys.stderr)
+            return 1
+        alert = add_alert(
+            city_key=args.city,
+            min_rating=args.min_rating,
+            notify_slack=args.slack or args.all_delivery or True,
+            notify_email=args.email or args.all_delivery,
+        )
+        print(f"[info] Alert created: {alert['id']}")
+        print(f"  City: {args.city}, Min rating: {args.min_rating}")
+        return 0
+
+    if args.alert_remove:
+        if remove_alert(args.alert_remove):
+            print(f"[info] Alert removed: {args.alert_remove}")
+            return 0
+        print(f"[error] Alert not found: {args.alert_remove}", file=sys.stderr)
+        return 1
 
     # --all means both
     if args.all:
         args.all_cities = True
         args.all_delivery = True
 
-    # Delivery defaults: if nothing specified, send both
-    explicit = args.email or args.slack or args.all_delivery
-    send_email_flag = args.email or args.all_delivery or (not explicit)
-    send_slack_flag = args.slack or args.all_delivery or (not explicit)
+    # Delivery defaults: if nothing specified and not no_send, send both
+    explicit = args.email or args.slack or args.all_delivery or args.no_send
+    send_email_flag = (args.email or args.all_delivery) and not args.no_send
+    send_slack_flag = (args.slack or args.all_delivery) and not args.no_send
+
+    # If no explicit delivery and not no_send, default to both (unless JSON format)
+    if not explicit and args.format != "json":
+        send_email_flag = True
+        send_slack_flag = True
 
     # Cities
     sel = _resolve_city_selection(args, unknown)
@@ -208,6 +276,11 @@ Examples:
     # Labels
     today_dt = date.today()
     tomorrow_dt = today_dt + timedelta(days=1)
+
+    if args.week:
+        # 7-day forecast mode
+        return _handle_week_forecast(sel, args)
+
     if args.weekend:
         delta_to_sat = (5 - today_dt.weekday()) % 7
         sat_dt = today_dt + timedelta(days=delta_to_sat)
@@ -230,6 +303,8 @@ Examples:
 
     # Build entries
     entries = []
+    include_details = args.verbose or args.format == "json"
+
     for key in sel:
         if key not in CITIES:
             print(f"[warn] Skipping invalid city key: {key}", file=sys.stderr)
@@ -250,15 +325,41 @@ Examples:
             try:
                 meta = CITIES[key]
                 if key == "chicago":
-                    e = chicago_forecast(lab)
+                    e = chicago_forecast(lab, include_details=include_details)
                 elif meta["type"] == "marine":
-                    e = marine_city_forecast(key, lab)
+                    e = marine_city_forecast(key, lab, include_details=include_details)
                 else:
-                    e = grid_city_forecast(key, lab)
+                    e = grid_city_forecast(key, lab, include_details=include_details)
+
+                # Add best sailing window for today
+                if lab.upper() in ("TODAY", "REST OF TODAY") and e.get("sailing"):
+                    best_window = find_best_sailing_window(key)
+                    if best_window:
+                        e["best_window"] = best_window
+
                 entries.append(e)
             except Exception as ex:
                 print(f"[warn] Failed to fetch forecast for {key} ({lab}): {ex}", file=sys.stderr)
                 # Continue with other cities even if one fails
+
+    # Check alerts if requested
+    if args.alert_check:
+        triggered = check_alerts(entries)
+        if triggered:
+            print(f"[info] {len(triggered)} alert(s) triggered")
+        else:
+            print("[info] No alerts triggered")
+
+    # Output based on format
+    if args.format == "json":
+        output = format_json_output(entries)
+        print(output)
+        return 0
+
+    if args.verbose:
+        for e in entries:
+            print(format_verbose_entry(e))
+        return 0
 
     # Slack text
     lines = [
@@ -272,6 +373,9 @@ Examples:
             e["sky_line"],
             e["sailing"],
             None if e["sailing"] else pick_suggestion(e["city"], e["sky_line"]),
+            temp_f=e.get("temp_f"),
+            sun=e.get("sun"),
+            best_window=e.get("best_window"),
         )
         for e in entries
     ]
@@ -309,10 +413,48 @@ Examples:
             print(f"[error] Slack send failed: {e}", file=sys.stderr)
 
     # Print once
-    print(text_fallback)
+    print(slack_text)
 
     # Return non-zero exit code if there were errors
     return 1 if errors else 0
+
+
+def _handle_week_forecast(sel: List[str], args: argparse.Namespace) -> int:
+    """
+    Handle 7-day forecast mode.
+
+    Args:
+        sel: List of city keys
+        args: Parsed arguments
+
+    Returns:
+        Exit code
+    """
+    all_entries = []
+
+    for key in sel:
+        if key not in CITIES:
+            print(f"[warn] Skipping invalid city key: {key}", file=sys.stderr)
+            continue
+
+        try:
+            entries = week_forecast(key, include_details=args.verbose or args.format == "json")
+            all_entries.extend(entries)
+
+            if args.format == "text" and not args.verbose:
+                print(format_week_summary(entries, CITIES[key]["label"]))
+        except Exception as ex:
+            print(f"[warn] Failed to fetch week forecast for {key}: {ex}", file=sys.stderr)
+
+    if args.format == "json":
+        print(format_json_output(all_entries))
+        return 0
+
+    if args.verbose:
+        for e in all_entries:
+            print(format_verbose_entry(e))
+
+    return 0
 
 
 if __name__ == "__main__":

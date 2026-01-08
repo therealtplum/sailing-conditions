@@ -3,7 +3,76 @@
 ## Overview
 This document summarizes the comprehensive review and improvements made to the sailing-conditions project.
 
-## Latest Improvements (January 2026)
+## Latest Improvements (January 2026) - New Features
+
+### 1. JSON Output Format ✅
+- Added `--format json` flag for machine-readable output
+- Full structured data including:
+  - Forecast details (wind, waves, sky)
+  - Temperature (Fahrenheit and Celsius)
+  - Sunrise/sunset times
+  - Best sailing window
+  - Rating breakdown
+- Perfect for integrations, automation, and data pipelines
+
+### 2. 7-Day Forecast ✅
+- Added `--week` flag for week-long forecasts
+- Shows all 7 days with daily ratings
+- Identifies the best day for sailing
+- Available in both text and JSON formats
+
+### 3. Temperature Display ✅
+- Forecasts now include temperature in both °F and °C
+- Displayed in all output formats (text, JSON, email)
+- Temperature shown in Slack and email outputs
+
+### 4. Verbose Mode ✅
+- Added `--verbose` / `-v` flag
+- Shows detailed rating breakdown:
+  - Base score
+  - Wind adjustments and reasons
+  - Wave adjustments and reasons
+  - Sky condition adjustments
+  - Raw to final score transformation
+
+### 5. Best Sailing Window ✅
+- Automatically finds optimal sailing hours each day
+- Analyzes hourly forecasts (6am-8pm)
+- Returns best 2-5 hour contiguous window
+- Shows average rating for the window
+
+### 6. Sunrise/Sunset Times ✅
+- Calculates sun times for each city/date
+- Uses astronomical formula (no external API needed)
+- Shows daylight hours
+- Included in text, JSON, and email outputs
+
+### 7. Alert Notifications ✅
+- Proactive notifications when conditions are favorable
+- Configure alerts per city with custom rating threshold
+- Supports both Slack and email notifications
+- CLI commands:
+  - `--alert-add`: Add new alert
+  - `--alert-remove`: Remove alert by ID
+  - `--alert-list`: List all alerts
+  - `--alert-check`: Check alerts against conditions
+- Alerts stored in `~/.sailing-conditions-alerts.json`
+
+### 8. Enhanced Test Suite ✅
+- **225 tests** (up from 193)
+- New test file: `test_new_features.py` with 32 tests covering:
+  - Rating breakdown
+  - JSON output
+  - Verbose output
+  - Week summary
+  - Sun times calculation
+  - Multi-day picking
+  - Alert system
+  - Enhanced formatters
+
+---
+
+## Previous Improvements (January 2026)
 
 ### 1. Project Configuration Consolidation ✅
 - **Removed duplicate pyproject.toml**: Deleted nested `sailing_conditions/pyproject.toml`
@@ -27,6 +96,7 @@ This document summarizes the comprehensive review and improvements made to the s
 - `SEVERE_WORDS` - frozenset of severe weather keywords
 - `RAINY_WORDS` - frozenset of rain-related keywords
 - Rating algorithm constants documented
+- Added `WEEKDAYS` constant
 
 #### Duplicate Code Removed
 - `SEVERE_WORDS` now imported from `config.py` (was duplicated in `cli.py` and `emoji.py`)
@@ -51,46 +121,13 @@ This document summarizes the comprehensive review and improvements made to the s
 
 ### 7. Public API Exports ✅
 - `__init__.py` now exports main functions and classes:
-  - Forecast functions: `chicago_forecast`, `marine_city_forecast`, `grid_city_forecast`
-  - Parsers: `parse_wind`, `parse_waves`, `parse_sky`, `compute_rating`
-  - Fetchers: `fetch_grid_periods`, `fetch_city_marine_text`
-  - Data: `CITIES`, `DEFAULT_KEYS`
-- Added `__version__ = "0.1.0"`
+  - Forecast functions: `chicago_forecast`, `marine_city_forecast`, `grid_city_forecast`, `week_forecast`, `find_best_sailing_window`
+  - Parsers: `parse_wind`, `parse_waves`, `parse_sky`, `compute_rating`, `compute_rating_breakdown`
+  - Formatters: `format_slack_line_city`, `format_json_output`, `format_verbose_entry`, `format_week_summary`, `build_email_html`
+  - Alerts: `add_alert`, `remove_alert`, `list_alerts`, `check_alerts`
+  - Data: `CITIES`
 
-### 8. Comprehensive Test Suite ✅
-- **193 tests** covering all modules
-- Test files added for:
-  - `test_cities.py` - City registry validation
-  - `test_cli.py` - CLI argument parsing and main function
-  - `test_config.py` - Configuration constants
-  - `test_emoji.py` - Weather emoji selection
-  - `test_fetchers.py` - HTTP and API fetching
-  - `test_forecast.py` - Forecast generation
-  - `test_formatters.py` - Slack and email formatting
-  - `test_parsers.py` - Text parsing functions
-  - `test_senders.py` - Email and Slack delivery
-
-## Previous Improvements
-
-### Cross-Platform Compatibility ✅
-- Fixed date formatting issue with non-portable `%-d` format
-- Cross-platform date handling in `cli.py`
-
-### Network Resilience ✅
-- Retry logic with exponential backoff in `http_get()`
-- Configurable retries and timeout
-- Graceful degradation when NWS services unavailable
-
-### Code Documentation ✅
-- Comprehensive docstrings on all functions
-- Type hints throughout codebase
-- Clear parameter and return value documentation
-
-### Input Validation & Error Handling ✅
-- City key validation before processing
-- Graceful handling of invalid cities
-- Descriptive error messages with context
-- Non-zero exit codes for errors
+---
 
 ## Project Structure
 
@@ -102,14 +139,15 @@ sailing-conditions/
 ├── IMPROVEMENTS.md         # This file
 ├── sailing_conditions/
 │   ├── __init__.py         # Public API exports
+│   ├── alerts.py           # Alert notification system (NEW)
 │   ├── cli.py              # Command-line interface
 │   ├── cities.py           # City registry
 │   ├── config.py           # Configuration and constants
 │   ├── emoji.py            # Weather emoji selection
-│   ├── fetchers.py         # Network requests (NWS, NDBC)
+│   ├── fetchers.py         # Network requests (NWS, NDBC, sun times)
 │   ├── forecast.py         # Forecast generation logic
-│   ├── formatters.py       # Output formatting (Slack, HTML)
-│   ├── parsers.py          # Text parsing (wind, waves, sky)
+│   ├── formatters.py       # Output formatting (Slack, HTML, JSON, verbose)
+│   ├── parsers.py          # Text parsing (wind, waves, sky, rating breakdown)
 │   └── senders.py          # Email and Slack delivery
 └── tests/
     ├── __init__.py
@@ -120,6 +158,7 @@ sailing-conditions/
     ├── test_fetchers.py
     ├── test_forecast.py
     ├── test_formatters.py
+    ├── test_new_features.py  # NEW: Tests for new features
     ├── test_parsers.py
     └── test_senders.py
 ```
@@ -148,12 +187,25 @@ pytest tests/ -v
 | cli.py | 17 | CLI args, suggestions, seasons |
 | config.py | 10 | Constants validation |
 | emoji.py | 14 | Weather emoji selection |
-| fetchers.py | 15 | HTTP, TGFTP, Grid, NDBC |
+| fetchers.py | 15 | HTTP, TGFTP, Grid, NDBC, sun times |
 | forecast.py | 17 | Forecast generation |
-| formatters.py | 9 | Slack/email formatting |
-| parsers.py | 26 | Wind, waves, sky parsing |
+| formatters.py | 9 | Slack/email/JSON/verbose formatting |
+| parsers.py | 26 | Wind, waves, sky, rating breakdown |
 | senders.py | 13 | Email/Slack delivery |
-| **Total** | **193** | **All modules covered** |
+| new_features.py | 32 | JSON, week, verbose, alerts, etc. |
+| **Total** | **225** | **All modules covered** |
+
+## Feature Summary
+
+| Feature | Flag(s) | Description |
+|---------|---------|-------------|
+| JSON Output | `--format json` | Machine-readable JSON output |
+| 7-Day Forecast | `--week` | Week-long forecast view |
+| Temperature | (automatic) | Shows temp in °F and °C |
+| Verbose Mode | `--verbose`, `-v` | Detailed rating breakdown |
+| Best Window | (automatic) | Optimal sailing hours |
+| Sun Times | (automatic) | Sunrise/sunset in output |
+| Alerts | `--alert-*` | Proactive notifications |
 
 ## Recommendations for Future Enhancements
 
@@ -164,17 +216,20 @@ pytest tests/ -v
 5. **Rate Limiting**: Add rate limiting to respect NWS API limits
 6. **Metrics/Monitoring**: Track API success/failure rates
 7. **Coverage Reports**: Add pytest-cov for coverage metrics
-8. **CLI Enhancements**: `--verbose`, `--dry-run`, `--format json` flags
+8. **Web UI**: Simple web dashboard for viewing forecasts
+9. **Historical Data**: Track and analyze historical conditions
 
 ## Conclusion
 
-The sailing-conditions project has been significantly improved with:
-- ✅ Consolidated project configuration
-- ✅ Clean code with imports at module level
-- ✅ Shared constants eliminating duplication
-- ✅ Bug fixes for edge cases
-- ✅ Modern Python patterns
-- ✅ Comprehensive 193-test suite
-- ✅ Better documentation
+The sailing-conditions project has been significantly enhanced with:
+- ✅ JSON output for integrations
+- ✅ 7-day forecasts for planning
+- ✅ Temperature display
+- ✅ Verbose mode with rating breakdown
+- ✅ Best sailing window finder
+- ✅ Sunrise/sunset times
+- ✅ Alert notification system
+- ✅ Comprehensive 225-test suite
+- ✅ Updated documentation
 
-The codebase is now more robust, maintainable, and ready for production use.
+The codebase is now feature-rich, well-tested, and ready for production use.

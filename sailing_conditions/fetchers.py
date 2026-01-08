@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import datetime as dt
+import math
 import sys
 import time
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import requests
 
@@ -147,6 +148,42 @@ def fetch_grid_periods(lat: float, lon: float) -> Optional[List[dict]]:
         return None
 
 
+def fetch_hourly_forecast(lat: float, lon: float) -> Optional[List[dict]]:
+    """
+    Fetch NWS hourly gridpoint forecast for a given location.
+
+    Args:
+        lat: Latitude
+        lon: Longitude
+
+    Returns:
+        List of hourly forecast periods, or None if fetch fails
+    """
+    try:
+        if not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
+            return None
+
+        p = http_get(f"https://api.weather.gov/points/{lat},{lon}", timeout=15, max_retries=2)
+        p.raise_for_status()
+        point_data = p.json()
+
+        if "properties" not in point_data or "forecastHourly" not in point_data["properties"]:
+            return None
+
+        hourly_url = point_data["properties"]["forecastHourly"]
+        h = http_get(hourly_url, timeout=15, max_retries=2)
+        h.raise_for_status()
+        hourly_data = h.json()
+
+        if "properties" not in hourly_data or "periods" not in hourly_data["properties"]:
+            return None
+
+        return hourly_data["properties"]["periods"]
+    except Exception as e:
+        print(f"[warn] Hourly forecast fetch failed: {e}", file=sys.stderr)
+        return None
+
+
 def grid_pick_day(periods: Optional[List[dict]], label: str) -> Optional[dict]:
     """
     Pick the most appropriate NWS grid 'forecast' period for a given label.
@@ -220,6 +257,47 @@ def grid_pick_day(periods: Optional[List[dict]], label: str) -> Optional[dict]:
 
     # Non-today cases: weekend/weekday labels — return the first for that date
     return same_day[0]
+
+
+def grid_pick_all_days(periods: Optional[List[dict]], num_days: int = 7) -> List[dict]:
+    """
+    Pick forecast periods for multiple days starting from today.
+
+    Args:
+        periods: List of forecast period dictionaries
+        num_days: Number of days to fetch (default 7)
+
+    Returns:
+        List of period dictionaries, one per day (daytime preferred)
+    """
+    if not periods:
+        return []
+
+    now = dt.datetime.now().astimezone()
+    today = now.date()
+    results = []
+
+    for day_offset in range(num_days):
+        target_date = today + dt.timedelta(days=day_offset)
+
+        def _pdate(p: dict) -> Optional[dt.date]:
+            try:
+                return dt.datetime.fromisoformat(p.get("startTime", "")).astimezone().date()
+            except Exception:
+                return None
+
+        same_day = [p for p in periods if _pdate(p) == target_date]
+        if not same_day:
+            continue
+
+        # Prefer daytime periods
+        daytime = [p for p in same_day if p.get("isDaytime", True)]
+        if daytime:
+            results.append(daytime[0])
+        else:
+            results.append(same_day[0])
+
+    return results
 
 
 def fetch_ndbc_latest(station: str) -> Optional[dict]:
@@ -296,4 +374,83 @@ def fetch_ndbc_latest(station: str) -> Optional[dict]:
         return None
     except Exception as e:
         print(f"[warn] NDBC parsing failed: {e}", file=sys.stderr)
+        return None
+
+
+def calculate_sun_times(lat: float, lon: float, date: Optional[dt.date] = None) -> Optional[dict]:
+    """
+    Calculate sunrise and sunset times for a given location and date.
+
+    Uses the standard astronomical algorithm for solar position.
+
+    Args:
+        lat: Latitude in degrees
+        lon: Longitude in degrees
+        date: Date for calculation (defaults to today)
+
+    Returns:
+        Dictionary with 'sunrise' and 'sunset' as datetime objects,
+        plus 'daylight_hours' as float, or None if calculation fails
+    """
+    if date is None:
+        date = dt.date.today()
+
+    try:
+        # Day of year
+        day_of_year = date.timetuple().tm_yday
+
+        # Solar declination (simplified formula)
+        declination = 23.45 * math.sin(math.radians(360 / 365 * (day_of_year - 81)))
+
+        # Hour angle at sunrise/sunset
+        lat_rad = math.radians(lat)
+        decl_rad = math.radians(declination)
+
+        # Check for polar day/night
+        cos_hour_angle = -math.tan(lat_rad) * math.tan(decl_rad)
+        if cos_hour_angle > 1:
+            # Sun never rises (polar night)
+            return {"sunrise": None, "sunset": None, "daylight_hours": 0}
+        if cos_hour_angle < -1:
+            # Sun never sets (midnight sun)
+            return {"sunrise": None, "sunset": None, "daylight_hours": 24}
+
+        hour_angle = math.degrees(math.acos(cos_hour_angle))
+
+        # Equation of time (simplified)
+        b = math.radians(360 / 365 * (day_of_year - 81))
+        eot = 9.87 * math.sin(2 * b) - 7.53 * math.cos(b) - 1.5 * math.sin(b)
+
+        # Time correction for longitude (4 minutes per degree)
+        # Reference meridian is based on timezone, approximate with lon/15
+        time_correction = 4 * lon + eot
+
+        # Solar noon (in minutes from midnight, local time)
+        solar_noon = 720 - time_correction
+
+        # Sunrise and sunset in minutes from midnight
+        sunrise_minutes = solar_noon - hour_angle * 4
+        sunset_minutes = solar_noon + hour_angle * 4
+
+        # Convert to datetime
+        def minutes_to_time(minutes: float) -> dt.time:
+            hours = int(minutes // 60) % 24
+            mins = int(minutes % 60)
+            return dt.time(hour=hours, minute=mins)
+
+        sunrise_time = minutes_to_time(sunrise_minutes)
+        sunset_time = minutes_to_time(sunset_minutes)
+
+        sunrise_dt = dt.datetime.combine(date, sunrise_time)
+        sunset_dt = dt.datetime.combine(date, sunset_time)
+
+        daylight_hours = (sunset_minutes - sunrise_minutes) / 60
+
+        return {
+            "sunrise": sunrise_dt,
+            "sunset": sunset_dt,
+            "daylight_hours": round(daylight_hours, 2),
+        }
+    except Exception as e:
+        print(f"[warn] Sun times calculation failed: {e}", file=sys.stderr)
         return None
