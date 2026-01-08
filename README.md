@@ -8,13 +8,25 @@
 - Simple 1–10 sailing rating based on wind, waves, and weather
 - Outputs to Slack or email
 - Extensible city list (20+ cities supported)
-- Retry logic for network requests
+- Retry logic with exponential backoff for network requests
 - Cross-platform support
+- Comprehensive test suite (193 tests)
+
+## Requirements
+
+- Python 3.10+
+- `requests` library
 
 ## Installation
 
 ```bash
-pip install -e .
+# Using uv (recommended)
+uv venv .venv
+source .venv/bin/activate
+uv pip install -e ".[dev]"
+
+# Or using pip
+pip install -e ".[dev]"
 ```
 
 ## Usage
@@ -36,6 +48,31 @@ python -m sailing_conditions.cli --today --chicago --nyc --slack
 
 # Use city flags directly
 python -m sailing_conditions.cli --today --miami --boston
+```
+
+### Programmatic Usage
+
+```python
+from sailing_conditions import (
+    chicago_forecast,
+    marine_city_forecast,
+    grid_city_forecast,
+    parse_wind,
+    compute_rating,
+    CITIES,
+)
+
+# Get Chicago forecast
+forecast = chicago_forecast("TODAY")
+print(f"Rating: {forecast['rating']}/10")
+print(f"Wind: {forecast['wind_line']}")
+print(f"Waves: {forecast['waves_line']}")
+
+# Get forecast for any marine city
+miami = marine_city_forecast("miami", "TOMORROW")
+
+# Parse wind from text
+direction, speed_range = parse_wind("N 10 to 15 kt")
 ```
 
 ### Command-Line Options
@@ -80,6 +117,7 @@ python -m sailing_conditions.cli --today --miami --boston
 
 **Other:**
 - `SUGGESTION_MODE=stable` - Use deterministic suggestions (for testing)
+- `SAILING_CONDITIONS_CONTACT` - Contact email for NWS API User-Agent header
 
 ### Supported Cities
 
@@ -101,14 +139,18 @@ The 1–10 rating is computed based on:
 ### Running Tests
 
 ```bash
-pytest tests/
+# Run all tests
+pytest tests/ -v
+
+# Run with coverage
+pytest tests/ --cov=sailing_conditions
 ```
 
 ### Project Structure
 
 ```
 sailing_conditions/
-├── __init__.py
+├── __init__.py      # Public API exports
 ├── cli.py           # Command-line interface
 ├── cities.py        # City registry
 ├── config.py        # Configuration constants
@@ -118,8 +160,19 @@ sailing_conditions/
 ├── formatters.py    # Output formatting (Slack, HTML)
 ├── parsers.py       # Text parsing (wind, waves, sky)
 └── senders.py       # Email and Slack delivery
+
+tests/
+├── test_cities.py
+├── test_cli.py
+├── test_config.py
+├── test_emoji.py
+├── test_fetchers.py
+├── test_forecast.py
+├── test_formatters.py
+├── test_parsers.py
+└── test_senders.py
 ```
 
 ## License
 
-See LICENSE file.
+MIT License - see [LICENSE](LICENSE) file.

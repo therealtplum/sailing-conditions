@@ -1,16 +1,20 @@
+"""Text parsing utilities for weather forecasts."""
+from __future__ import annotations
+
 import re
 from typing import Optional, Tuple
 
-# Wind & direction
+# Wind & direction patterns
 WIND_RE = re.compile(
     r"(\d{1,2})\s*(?:to|-|–|—)\s*(\d{1,2})\s*(?:kt|knots?)|(\d{1,2})\s*(?:kt|knots?)",
     re.IGNORECASE,
 )
 DIR_RE = re.compile(
-    r"\b(NNE|ENE|ESE|SSE|SSW|WSW|WNW|NNW|N|NE|E|SE|S|SW|W|NW)\b", re.IGNORECASE
+    r"\b(NNE|ENE|ESE|SSE|SSW|WSW|WNW|NNW|N|NE|E|SE|S|SW|W|NW)\b",
+    re.IGNORECASE,
 )
 
-# Waves / seas — accept either word, with ranges or single values, plus "around X ft"
+# Waves / seas patterns — accept either word, with ranges or single values, plus "around X ft"
 WAVE_RE = re.compile(
     r"(?:(?:waves?|seas?)\s*)?(?:around\s*)?(\d(?:\.\d)?)\s*(?:to|-|–|—)\s*(\d(?:\.\d)?)\s*(?:ft|feet)"
     r"|(?:(?:waves?|seas?)\s*)?(?:around\s*)?(\d(?:\.\d)?)\s*(?:ft|feet)",
@@ -33,7 +37,7 @@ SKY_RE = re.compile(
 )
 
 # Sea-state word mappings (when numerics absent)
-SEA_STATE_MAP = {
+SEA_STATE_MAP: dict[str, tuple[float, float]] = {
     "smooth": (0.1, 0.5),
     "light chop": (0.5, 1.5),
     "slight chop": (0.5, 1.5),
@@ -49,10 +53,10 @@ SEA_STATE_KEYS = tuple(sorted(SEA_STATE_MAP.keys(), key=len, reverse=True))
 def parse_wind(text: str) -> Tuple[Optional[str], Optional[Tuple[int, int]]]:
     """
     Parse wind direction and speed from text.
-    
+
     Args:
         text: Text containing wind information
-    
+
     Returns:
         Tuple of (direction, (low_speed, high_speed)) in knots, or (None, None) if not found
     """
@@ -71,10 +75,10 @@ def parse_wind(text: str) -> Tuple[Optional[str], Optional[Tuple[int, int]]]:
 def parse_waves(text: str) -> Optional[Tuple[float, float]]:
     """
     Parse wave height from text.
-    
+
     Args:
         text: Text containing wave/sea information
-    
+
     Returns:
         Tuple of (low_height, high_height) in feet, or None if not found
     """
@@ -103,10 +107,10 @@ def parse_waves(text: str) -> Optional[Tuple[float, float]]:
 def parse_sky(text: str) -> Optional[str]:
     """
     Parse sky/weather conditions from text.
-    
+
     Args:
         text: Text containing sky/weather description
-    
+
     Returns:
         Sky condition string (lowercase), or None if not found
     """
@@ -114,15 +118,26 @@ def parse_sky(text: str) -> Optional[str]:
     return m.group(0).lower() if m else None
 
 
-def compute_rating(wind_kts: Optional[Tuple[int, int]], waves_ft: Optional[Tuple[float, float]], sky: Optional[str]) -> int:
+def compute_rating(
+    wind_kts: Optional[Tuple[int, int]],
+    waves_ft: Optional[Tuple[float, float]],
+    sky: Optional[str],
+) -> int:
     """
     Compute a 1-10 sailing condition rating based on wind, waves, and sky conditions.
-    
+
+    The rating algorithm:
+    - Starts at 10 (perfect conditions)
+    - Subtracts points for high waves (>3ft: -2, >4ft: -4, >5ft: -6)
+    - Subtracts points for dangerous wind (>=28kt: -6, >=23kt: -4, >=18kt: -2)
+    - Subtracts points for light wind (<5kt: -2, <9kt: -1)
+    - Adds/subtracts for sky conditions (sunny: +1, storms: -5, rain: -2)
+
     Args:
         wind_kts: Wind speed range in knots (low, high)
         waves_ft: Wave height range in feet (low, high)
         sky: Sky/weather description
-    
+
     Returns:
         Rating from 1 (poor) to 10 (excellent)
     """
@@ -131,6 +146,7 @@ def compute_rating(wind_kts: Optional[Tuple[int, int]], waves_ft: Optional[Tuple
         return 5
 
     score = 10
+
     # Waves penalty
     if waves_ft:
         hi = max(waves_ft)
@@ -140,6 +156,7 @@ def compute_rating(wind_kts: Optional[Tuple[int, int]], waves_ft: Optional[Tuple
             score -= 4
         elif hi > 3:
             score -= 2
+
     # Wind penalty/bonus
     if wind_kts:
         lo, hi = wind_kts
@@ -153,6 +170,7 @@ def compute_rating(wind_kts: Optional[Tuple[int, int]], waves_ft: Optional[Tuple
             score -= 2
         elif lo < 9:
             score -= 1
+
     # Sky bonus/penalty
     if sky:
         s = sky.lower()
@@ -169,45 +187,41 @@ def compute_rating(wind_kts: Optional[Tuple[int, int]], waves_ft: Optional[Tuple
 def normalize_heading(h: str) -> str:
     """
     Normalize a heading string by removing extra whitespace and uppercasing.
-    
+
     Args:
         h: Heading string to normalize
-    
+
     Returns:
         Normalized heading string
     """
-    import re as _re
-
-    return _re.sub(r"\s+", " ", (h or "").strip().upper())
+    return re.sub(r"\s+", " ", (h or "").strip().upper())
 
 
 def extract_day_blurb(full_text: str, day_heading: str) -> Optional[str]:
     """
     Extract a section of text for a specific day heading from marine forecast text.
-    
+
     Args:
         full_text: Full marine forecast text
         day_heading: Day heading to extract (e.g., "TODAY", "TOMORROW")
-    
+
     Returns:
         Extracted text section, or None if not found
     """
-    import re as _re
-
     txt = (full_text or "").replace("\r", "")
     dh = normalize_heading(day_heading)
-    pattern = rf"(?mis)^\s*\.?{_re.escape(dh)}(?:\s+NIGHT)?\.{{3,}}(.*?)(?=^\s*\.?[A-Z][A-Z /-]{{2,}}(?:\s+NIGHT)?\.{{3,}}|\Z)"
-    m = _re.search(pattern, txt)
+    pattern = rf"(?mis)^\s*\.?{re.escape(dh)}(?:\s+NIGHT)?\.{{3,}}(.*?)(?=^\s*\.?[A-Z][A-Z /-]{{2,}}(?:\s+NIGHT)?\.{{3,}}|\Z)"
+    m = re.search(pattern, txt)
     return m.group(0).strip() if m else None
 
 
 def extract_today_blurb(full_text: str) -> str:
     """
     Extract today's forecast section from marine text, trying multiple heading formats.
-    
+
     Args:
         full_text: Full marine forecast text
-    
+
     Returns:
         Today's forecast section, or first paragraph if no specific heading found
     """
@@ -222,7 +236,6 @@ def extract_today_blurb(full_text: str) -> str:
         sec = extract_day_blurb(full_text, c)
         if sec:
             return sec
-    import re as _re
 
-    m = _re.search(r"(?s)(?:\A|^\s*\n)(.*?)(?:\n\s*\n|\Z)", full_text or "")
-    return (m.group(1).strip() if m else (full_text or ""))
+    m = re.search(r"(?s)(?:\A|^\s*\n)(.*?)(?:\n\s*\n|\Z)", full_text or "")
+    return m.group(1).strip() if m else (full_text or "")

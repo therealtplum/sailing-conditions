@@ -1,20 +1,30 @@
 #!/usr/bin/env python3
+"""Command-line interface for sailing-conditions."""
+from __future__ import annotations
+
 import argparse
 import calendar
+import os
+import random
 import sys
 from datetime import date, timedelta
 from typing import List
+
 from .cities import CITIES
-from .config import DEFAULT_KEYS
-from .parsers import extract_day_blurb
+from .config import DEFAULT_KEYS, RAINY_WORDS, SEVERE_WORDS
 from .fetchers import fetch_city_marine_text
-from .forecast import chicago_forecast, marine_city_forecast, grid_city_forecast, _pick_present_day_label
-from .formatters import format_slack_line_city, build_email_html
-from .senders import send_email_html, post_slack
+from .forecast import (
+    chicago_forecast,
+    grid_city_forecast,
+    marine_city_forecast,
+    _pick_present_day_label,
+)
+from .formatters import build_email_html, format_slack_line_city
+from .senders import post_slack, send_email_html
 
 # Suggestions for non-sailing cities
 OUTDOOR_SUGG = [
-    "find a farmer’s market",
+    "find a farmer's market",
     "hit a park picnic",
     "catch a baseball game",
     "walk a new waterfront path",
@@ -37,9 +47,6 @@ NEUTRAL_SUGG = [
     "check a pop-up market",
 ]
 
-RAINY_WORDS = {"rain", "showers", "thunder", "storm", "t-storm", "drizzle"}
-SEVERE_WORDS = {"hazard", "warning", "gale", "storm", "hurricane", "hvy freezing spray"}
-
 
 def _is_rainy(sky: str | None) -> bool:
     """Check if sky description indicates rain."""
@@ -49,17 +56,14 @@ def _is_rainy(sky: str | None) -> bool:
 def pick_suggestion(city_label: str, sky: str | None) -> str:
     """
     Pick an activity suggestion based on weather conditions.
-    
+
     Args:
         city_label: City name
         sky: Sky/weather description
-    
+
     Returns:
         Activity suggestion string
     """
-    import os
-    import random
-
     stable = os.environ.get("SUGGESTION_MODE", "").lower() == "stable"
     rng = random.Random(f"{city_label}-{date.today().isoformat()}") if stable else random.SystemRandom()
 
@@ -75,10 +79,10 @@ def pick_suggestion(city_label: str, sky: str | None) -> str:
 def in_season(d: date) -> bool:
     """
     Check if a date falls within the Chicago sailing season (Memorial Day to Labor Day).
-    
+
     Args:
         d: Date to check
-    
+
     Returns:
         True if date is in season, False otherwise
     """
@@ -89,20 +93,20 @@ def in_season(d: date) -> bool:
     return memorial_day <= d <= labor_day
 
 
-def _resolve_city_selection(args, unknown: List[str]) -> List[str]:
+def _resolve_city_selection(args: argparse.Namespace, unknown: List[str]) -> List[str]:
     """
     Resolve which cities to include based on command-line arguments.
-    
+
     Priority order:
     1. --only flag (comma-separated list)
     2. Unknown flags like --miami or legacy flags like --chicago
     3. --all-cities flag
     4. Default cities
-    
+
     Args:
         args: Parsed command-line arguments
         unknown: List of unknown arguments
-    
+
     Returns:
         List of city keys to process
     """
@@ -149,7 +153,7 @@ def _resolve_city_selection(args, unknown: List[str]) -> List[str]:
 def main() -> int:
     """
     Main CLI entry point for sailing conditions forecast tool.
-    
+
     Returns:
         Exit code (0 for success, non-zero for errors)
     """
@@ -162,7 +166,7 @@ Examples:
   %(prog)s --tomorrow --all-cities --email
   %(prog)s --weekend --miami --nyc
   %(prog)s --all
-        """
+        """,
     )
 
     # Day (mutually exclusive)
@@ -230,7 +234,7 @@ Examples:
         if key not in CITIES:
             print(f"[warn] Skipping invalid city key: {key}", file=sys.stderr)
             continue
-        
+
         # Choose concrete "today" label that actually exists for marine products
         if labels == ["REST OF TODAY", "TODAY"]:
             if CITIES[key]["type"] == "marine":
@@ -247,11 +251,10 @@ Examples:
                 meta = CITIES[key]
                 if key == "chicago":
                     e = chicago_forecast(lab)
+                elif meta["type"] == "marine":
+                    e = marine_city_forecast(key, lab)
                 else:
-                    if meta["type"] == "marine":
-                        e = marine_city_forecast(key, lab)
-                    else:
-                        e = grid_city_forecast(key, lab)
+                    e = grid_city_forecast(key, lab)
                 entries.append(e)
             except Exception as ex:
                 print(f"[warn] Failed to fetch forecast for {key} ({lab}): {ex}", file=sys.stderr)
@@ -297,7 +300,7 @@ Examples:
         except Exception as e:
             errors.append(f"Email send failed: {e}")
             print(f"[error] Email send failed: {e}", file=sys.stderr)
-    
+
     if send_slack_flag:
         try:
             post_slack(slack_text)
@@ -307,7 +310,7 @@ Examples:
 
     # Print once
     print(text_fallback)
-    
+
     # Return non-zero exit code if there were errors
     return 1 if errors else 0
 

@@ -1,19 +1,22 @@
-# sailing_conditions/senders.py
+"""Email and Slack delivery for sailing conditions."""
 from __future__ import annotations
+
 import os
-import sys
 import smtplib
-import ssl
 import socket
-import requests
+import ssl
+import sys
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Iterable, Optional
+
+import requests
 
 
 # ------------------------------
 # Slack
 # ------------------------------
+
 
 def post_slack(message: str) -> None:
     """
@@ -22,6 +25,12 @@ def post_slack(message: str) -> None:
       2) Bot token + channel (SLACK_BOT_TOKEN + SLACK_CHANNEL)
 
     Prints only status/warnings; does NOT echo the message to stdout.
+
+    Args:
+        message: The message text to send
+
+    Raises:
+        Exception: Re-raises any exception after logging
     """
     webhook = os.environ.get("SLACK_WEBHOOK_URL")
     if webhook:
@@ -33,6 +42,7 @@ def post_slack(message: str) -> None:
                 print("[info] Slack webhook sent.")
         except Exception as e:
             print(f"[warn] Slack webhook error: {e}", file=sys.stderr)
+            raise
         return
 
     bot = os.environ.get("SLACK_BOT_TOKEN")
@@ -55,6 +65,7 @@ def post_slack(message: str) -> None:
                 print("[info] Slack bot message sent.")
         except Exception as e:
             print(f"[warn] Slack bot error: {e}", file=sys.stderr)
+            raise
     else:
         print("[info] No Slack credentials set; skipping Slack send.")
 
@@ -63,7 +74,9 @@ def post_slack(message: str) -> None:
 # Email (HTML)
 # ------------------------------
 
+
 def _split_addrs(val: Optional[str]) -> list[str]:
+    """Split email addresses by comma or semicolon."""
     if not val:
         return []
     # support comma or semicolon separated lists
@@ -72,6 +85,7 @@ def _split_addrs(val: Optional[str]) -> list[str]:
 
 
 def _smtp_params() -> dict[str, Optional[str]]:
+    """Get SMTP parameters from environment variables."""
     return {
         "host": os.environ.get("SMTP_HOST"),
         "port": os.environ.get("SMTP_PORT"),
@@ -83,6 +97,7 @@ def _smtp_params() -> dict[str, Optional[str]]:
 
 
 def _smtp_ready(params: dict[str, Optional[str]]) -> bool:
+    """Check if required SMTP parameters are set."""
     required = ("host", "port", "from", "to")
     for k in required:
         if not params.get(k) or not str(params[k]).strip():
@@ -90,7 +105,14 @@ def _smtp_ready(params: dict[str, Optional[str]]) -> bool:
     return True
 
 
-def _build_message(subject: str, html: str, text_fallback: str, sender: str, recipients: Iterable[str]) -> MIMEMultipart:
+def _build_message(
+    subject: str,
+    html: str,
+    text_fallback: str,
+    sender: str,
+    recipients: Iterable[str],
+) -> MIMEMultipart:
+    """Build a MIME multipart email message."""
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = sender
@@ -105,7 +127,9 @@ def _build_message(subject: str, html: str, text_fallback: str, sender: str, rec
 
 def send_email_html(subject: str, html: str, text_fallback: str = "") -> None:
     """
-    Send a rich HTML email. Uses:
+    Send a rich HTML email.
+
+    Uses environment variables:
       SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, EMAIL_FROM, EMAIL_TO
 
     Behavior:
@@ -113,6 +137,14 @@ def send_email_html(subject: str, html: str, text_fallback: str = "") -> None:
       - If PORT == 587: STARTTLS
       - If SMTP_USER/PASS missing, try anonymous (some relays allow it)
       - Prints status/warnings only; does NOT echo message body
+
+    Args:
+        subject: Email subject line
+        html: HTML body content
+        text_fallback: Plain text fallback content
+
+    Raises:
+        Exception: Re-raises any exception after logging
     """
     params = _smtp_params()
     if not _smtp_ready(params):
@@ -156,11 +188,14 @@ def send_email_html(subject: str, html: str, text_fallback: str = "") -> None:
         print(f"[info] Email sent to {', '.join(recipients)}.")
     except (smtplib.SMTPException, socket.gaierror, TimeoutError) as e:
         print(f"[warn] SMTP error: {e}", file=sys.stderr)
+        raise
     except Exception as e:
         print(f"[warn] Email send failed: {e}", file=sys.stderr)
+        raise
 
 
 def _smtp_login_if_needed(smtp: smtplib.SMTP, params: dict[str, Optional[str]]) -> None:
+    """Attempt SMTP login if credentials are provided."""
     user = params.get("user")
     pwd = params.get("pass")
     if user and pwd:

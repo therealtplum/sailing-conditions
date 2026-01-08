@@ -1,14 +1,62 @@
-from typing import List
+"""Output formatters for Slack and email."""
+from __future__ import annotations
 
-def format_slack_line_city(prefix_emoji: str, city: str, label: str, rating: int,
-                           wind_line: str, waves_line: str, sky_line: str, sailing: bool,
-                           suggestion: str | None) -> str:
+from typing import List, Optional
+
+
+def format_slack_line_city(
+    prefix_emoji: str,
+    city: str,
+    label: str,
+    rating: int,
+    wind_line: str,
+    waves_line: str,
+    sky_line: str,
+    sailing: bool,
+    suggestion: Optional[str],
+) -> str:
+    """
+    Format a single city forecast line for Slack.
+
+    Args:
+        prefix_emoji: Emoji prefix (e.g., "⛵ ☀")
+        city: City name
+        label: Day label (e.g., "Today")
+        rating: Sailing rating (1-10)
+        wind_line: Formatted wind string
+        waves_line: Formatted waves string
+        sky_line: Sky condition string
+        sailing: Whether this is a sailing city
+        suggestion: Activity suggestion for non-sailing cities
+
+    Returns:
+        Formatted Slack message line
+    """
     if sailing:
         return f"{prefix_emoji} {city} — {label}: {rating}/10. Wind {wind_line}, waves {waves_line}, {sky_line}."
     return f"{prefix_emoji} {city} — {label}: {sky_line or '—'}. {suggestion or ''}".rstrip()
 
+
 def build_email_html(entries: List[dict], date_str: str) -> str:
-    def color(r): return "#16a34a" if r>=8 else ("#eab308" if r>=5 else "#dc2626")
+    """
+    Build HTML email content from forecast entries.
+
+    Args:
+        entries: List of forecast dictionaries
+        date_str: Formatted date string for the header
+
+    Returns:
+        Complete HTML email string
+    """
+
+    def color(r: int) -> str:
+        """Get color based on rating."""
+        if r >= 8:
+            return "#16a34a"
+        if r >= 5:
+            return "#eab308"
+        return "#dc2626"
+
     rows = []
     for e in entries:
         rows.append(f"""
@@ -22,6 +70,7 @@ def build_email_html(entries: List[dict], date_str: str) -> str:
           <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">{e['waves_line']}</td>
           <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">{e['sky_line']}</td>
         </tr>""")
+
     return f"""<!doctype html>
 <html><body style="margin:0;padding:0;background:#f6f7fb;font-family:Arial,Helvetica,sans-serif;">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f6f7fb;padding:20px 0;">
