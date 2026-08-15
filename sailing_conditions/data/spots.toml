@@ -1,0 +1,172 @@
+# Built-in sailing spots.
+#
+# Coordinates point at the water you would actually sail on, not at the city
+# hall a few miles inland — NWS grids are ~2.5 km, and the difference between
+# a lakefront cell and a downtown cell is a real difference in wind.
+#
+# `buoy` is an NDBC station used for live observations. Every ID here was
+# verified against https://www.ndbc.noaa.gov/data/realtime2/ ; some stations
+# report wind only, others waves only, and the report degrades gracefully.
+#
+# Add your own in ~/.config/sailing-conditions/config.toml — same schema.
+
+[spots.chicago]
+name = "Belmont Harbor"
+region = "Chicago, IL"
+lat = 41.939
+lon = -87.633
+buoy = "CHII2"
+blurb = "Lake Michigan. Flat in an offshore westerly, short and steep in a NE blow."
+tags = ["great-lakes", "fresh-water"]
+
+[spots.sfbay]
+name = "Berkeley Circle"
+region = "San Francisco Bay, CA"
+lat = 37.862
+lon = -122.365
+buoy = "FTPC1"
+blurb = "The most reliable summer breeze in the country. Reef early."
+tags = ["bay", "big-breeze"]
+
+[spots.annapolis]
+name = "Annapolis"
+region = "Chesapeake Bay, MD"
+lat = 38.974
+lon = -76.480
+buoy = "TPLM2"
+blurb = "Light-air country. Thermal fills in the afternoon or it doesn't."
+tags = ["bay", "light-air"]
+
+[spots.newport]
+name = "Newport"
+region = "Narragansett Bay, RI"
+lat = 41.487
+lon = -71.326
+buoy = "44097"
+blurb = "Sea breeze most summer afternoons, swell through the East Passage."
+tags = ["ocean", "sea-breeze"]
+
+[spots.boston]
+name = "Boston Harbor"
+region = "Boston, MA"
+lat = 42.339
+lon = -70.995
+buoy = "44013"
+blurb = "Harbor islands knock the chop down; outside them it builds fast."
+tags = ["ocean", "harbor"]
+
+[spots.nyc]
+name = "The Narrows"
+region = "New York Harbor, NY"
+lat = 40.606
+lon = -74.041
+buoy = "44065"
+blurb = "Current runs hard through the tide gate. Watch the ferries."
+tags = ["harbor", "current"]
+
+[spots.portlandme]
+name = "Casco Bay"
+region = "Portland, ME"
+lat = 43.656
+lon = -70.212
+buoy = "44007"
+blurb = "Cold water, clean breeze, fog when the southerly meets the Gulf of Maine."
+tags = ["ocean", "cold-water"]
+
+[spots.miami]
+name = "Biscayne Bay"
+region = "Miami, FL"
+lat = 25.731
+lon = -80.163
+buoy = "VAKF1"
+blurb = "Shallow, warm and flat. Afternoon thunderstorms are the real hazard."
+tags = ["bay", "warm-water", "thunderstorms"]
+
+[spots.keywest]
+name = "Key West"
+region = "Florida Keys, FL"
+lat = 24.556
+lon = -81.805
+buoy = "SANF1"
+blurb = "Trade-wind sailing. December through April is the season."
+tags = ["ocean", "trade-winds"]
+
+[spots.charleston]
+name = "Charleston Harbor"
+region = "Charleston, SC"
+lat = 32.763
+lon = -79.898
+buoy = "41004"
+blurb = "Sea breeze against an ebb tide makes for a lumpy harbor mouth."
+tags = ["harbor", "current"]
+
+[spots.tampa]
+name = "Tampa Bay"
+region = "Tampa, FL"
+lat = 27.760
+lon = -82.553
+buoy = "42036"
+blurb = "Big protected bay, thin water outside the channels."
+tags = ["bay", "shallow"]
+
+[spots.galveston]
+name = "Galveston Bay"
+region = "Galveston, TX"
+lat = 29.310
+lon = -94.789
+buoy = "42035"
+blurb = "Steady southerly all summer. Short, sharp chop when it pipes up."
+tags = ["bay", "steady-breeze"]
+
+[spots.sandiego]
+name = "San Diego Bay"
+region = "San Diego, CA"
+lat = 32.709
+lon = -117.183
+buoy = "46232"
+blurb = "Gentle and consistent. The easiest place in the country to learn."
+tags = ["bay", "light-air"]
+
+[spots.santamonica]
+name = "Santa Monica Bay"
+region = "Marina del Rey, CA"
+lat = 33.962
+lon = -118.451
+buoy = "46221"
+blurb = "Sea breeze builds by noon; swell wraps in from the west."
+tags = ["ocean", "sea-breeze"]
+
+[spots.seattle]
+name = "Shilshole Bay"
+region = "Puget Sound, WA"
+lat = 47.681
+lon = -122.408
+buoy = "WPOW1"
+blurb = "Sound breeze funnels north-south. Rain is not a reason to stay in."
+tags = ["sound", "cold-water"]
+
+[spots.milwaukee]
+name = "Milwaukee"
+region = "Lake Michigan, WI"
+lat = 43.033
+lon = -87.878
+buoy = "45013"
+blurb = "Same lake as Chicago, colder water, better sea breeze."
+tags = ["great-lakes", "fresh-water"]
+
+[spots.cleveland]
+name = "Cleveland"
+region = "Lake Erie, OH"
+lat = 41.508
+lon = -81.700
+buoy = "CNDO1"
+blurb = "Shallow lake, so the waves stack up quickly and lie down just as fast."
+tags = ["great-lakes", "fresh-water"]
+
+[spots.laketravis]
+name = "Lake Travis"
+region = "Austin, TX"
+lat = 30.402
+lon = -97.918
+blurb = "Hill-country lake with no wave grid and no buoy — the score runs on wind alone."
+tags = ["lake", "inland"]

@@ -1,0 +1,66 @@
+{
+ "_comment": "Hand-built from the live /alerts/active schema (see tools/capture_fixtures.py) because marine warnings are, happily, rare. Field names and value formats match a real response.",
+ "features": [
+  {
+   "id": "urn:oid:2.49.0.1.840.0.example.001.1",
+   "type": "Feature",
+   "properties": {
+    "@type": "wx:Alert",
+    "id": "urn:oid:2.49.0.1.840.0.example.001.1",
+    "areaDesc": "Chicago to Winthrop Harbor IL",
+    "event": "Small Craft Advisory",
+    "status": "Actual",
+    "messageType": "Alert",
+    "severity": "Moderate",
+    "certainty": "Likely",
+    "urgency": "Expected",
+    "onset": "2026-08-15T10:00:00-05:00",
+    "ends": "2026-08-15T19:00:00-05:00",
+    "effective": "2026-08-15T04:12:00-05:00",
+    "expires": "2026-08-15T19:00:00-05:00",
+    "headline": "Small Craft Advisory issued August 15 at 4:12AM CDT until August 15 at 7:00PM CDT by NWS Chicago IL",
+    "description": "Winds 20 to 25 kt with gusts up to 30 kt and waves 4 to 7 ft."
+   }
+  },
+  {
+   "id": "urn:oid:2.49.0.1.840.0.example.002.1",
+   "type": "Feature",
+   "properties": {
+    "@type": "wx:Alert",
+    "id": "urn:oid:2.49.0.1.840.0.example.002.1",
+    "areaDesc": "Nearshore Waters",
+    "event": "Special Marine Warning",
+    "status": "Actual",
+    "messageType": "Alert",
+    "severity": "Severe",
+    "certainty": "Observed",
+    "urgency": "Immediate",
+    "onset": "2026-08-15T14:00:00-05:00",
+    "ends": "2026-08-15T16:00:00-05:00",
+    "effective": "2026-08-15T14:00:00-05:00",
+    "expires": "2026-08-15T16:00:00-05:00",
+    "headline": "Special Marine Warning issued August 15 at 2:00PM CDT until August 15 at 4:00PM CDT by NWS Chicago IL",
+    "description": "A strong thunderstorm was located over the nearshore waters."
+   }
+  },
+  {
+   "id": "urn:oid:2.49.0.1.840.0.example.003.1",
+   "type": "Feature",
+   "properties": {
+    "@type": "wx:Alert",
+    "id": "urn:oid:2.49.0.1.840.0.example.003.1",
+    "areaDesc": "Test area",
+    "event": "Test Message",
+    "status": "Test",
+    "messageType": "Alert",
+    "severity": "Unknown",
+    "certainty": "Unknown",
+    "urgency": "Unknown",
+    "onset": null,
+    "ends": null,
+    "headline": "This is a test of the emergency alert system.",
+    "description": "Ignore me."
+   }
+  }
+ ]
+}

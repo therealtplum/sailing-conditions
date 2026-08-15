@@ -1,461 +1,330 @@
-#!/usr/bin/env python3
-"""Command-line interface for sailing-conditions."""
+"""Command-line interface.
+
+The CLI is deliberately thin: it parses arguments, builds a context, calls
+into :mod:`sailing_conditions.service`, and hands the result to a renderer.
+Every command takes its dependencies from a :class:`Context` that tests can
+construct with a fixture-backed fetcher, which is why the end-to-end tests
+run the real ``main()`` with no network.
+
+Exit codes: ``0`` success, ``1`` runtime failure, ``2`` bad usage.
+"""
+
 from __future__ import annotations
 
 import argparse
-import calendar
-import os
-import random
+import json
+import logging
 import sys
-from datetime import date, timedelta
-from typing import List
+from collections.abc import Sequence
+from dataclasses import dataclass
 
-from .alerts import add_alert, check_alerts, format_alerts_list, list_alerts, remove_alert
-from .cities import CITIES
-from .config import DEFAULT_KEYS, RAINY_WORDS, SEVERE_WORDS
-from .fetchers import fetch_city_marine_text
-from .forecast import (
-    chicago_forecast,
-    find_best_sailing_window,
-    grid_city_forecast,
-    marine_city_forecast,
-    week_forecast,
-    _pick_present_day_label,
-)
-from .formatters import (
-    build_email_html,
-    format_json_output,
-    format_slack_line_city,
-    format_verbose_entry,
-    format_week_summary,
-)
-from .senders import post_slack, send_email_html
+from rich.console import Console
+from rich.table import Table
+from rich.text import Text
 
-# Suggestions for non-sailing cities
-OUTDOOR_SUGG = [
-    "find a farmer's market",
-    "hit a park picnic",
-    "catch a baseball game",
-    "walk a new waterfront path",
-    "try a rooftop spot",
-    "rent a bike and explore",
-]
-INDOOR_SUGG = [
-    "museum hop",
-    "duck into a matinee",
-    "bookstore + coffee crawl",
-    "try an indoor food hall",
-    "visit a gallery",
-    "karaoke night",
-]
-NEUTRAL_SUGG = [
-    "discover a neighborhood bakery",
-    "brunch somewhere new",
-    "cozy café + people-watch",
-    "take a cooking class",
-    "check a pop-up market",
-]
+from .models import Report, Spot
+from .profiles import BUILTIN_PROFILES, BoatProfile, get_profile
+from .render import jsonout, render_report, render_summary
+from .service import Forecaster, build_forecaster
+from .settings import PACKAGE_VERSION, ConfigError, Settings
+from .sources.http import Fetcher
+from .spots import SpotRegistry, UnknownSpot
+from .watch import WatchState, rules_from_settings, run_watch
+
+EXIT_OK = 0
+EXIT_ERROR = 1
+EXIT_USAGE = 2
+
+MAX_DAYS = 7
 
 
-def _is_rainy(sky: str | None) -> bool:
-    """Check if sky description indicates rain."""
-    return bool(sky) and any(k in sky.lower() for k in RAINY_WORDS)
+@dataclass(frozen=True, slots=True)
+class Context:
+    """Everything a command needs, assembled once in :func:`main`."""
+
+    settings: Settings
+    registry: SpotRegistry
+    forecaster: Forecaster
+    console: Console
+    args: argparse.Namespace
+
+    def profile(self) -> BoatProfile:
+        """The boat profile selected on the command line or in config."""
+        return get_profile(self.args.profile or self.settings.profile, self.settings.user_profiles)
+
+    def spots(self) -> list[Spot]:
+        """Resolve the requested spots, falling back to the configured default."""
+        keys = list(self.args.spots) or list(self.settings.spots)
+        return self.registry.resolve(keys)
+
+    def reports(self, *, days: int) -> list[Report]:
+        """Build reports for the selected spots."""
+        return self.forecaster.reports(
+            self.spots(),
+            self.profile(),
+            days=days,
+            min_score=self.args.min_score if self.args.min_score is not None else self.settings.min_score,
+            min_hours=self.settings.min_hours,
+            live=not self.args.no_live,
+        )
 
 
-def pick_suggestion(city_label: str, sky: str | None) -> str:
-    """
-    Pick an activity suggestion based on weather conditions.
+def build_parser() -> argparse.ArgumentParser:
+    """Construct the argument parser for every subcommand."""
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("spots", nargs="*", help="spot keys (default: from config, else chicago)")
+    common.add_argument("-p", "--profile", help=f"boat profile ({', '.join(BUILTIN_PROFILES)})")
+    common.add_argument("--min-score", type=float, help="score an hour must clear to join a window")
+    common.add_argument("--json", action="store_true", help="emit JSON instead of a rendered report")
+    common.add_argument("--compact", action="store_true", help="with --json, omit the hour-by-hour detail")
+    common.add_argument("--explain", action="store_true", help="show the factor arithmetic behind the score")
+    common.add_argument("--no-live", action="store_true", help="skip buoy observations")
+    common.add_argument("--no-cache", action="store_true", help="bypass the on-disk HTTP cache")
+    common.add_argument("--no-color", action="store_true", help="disable color output")
+    common.add_argument("-v", "--verbose", action="store_true", help="log what the fetcher is doing")
 
-    Args:
-        city_label: City name
-        sky: Sky/weather description
-
-    Returns:
-        Activity suggestion string
-    """
-    stable = os.environ.get("SUGGESTION_MODE", "").lower() == "stable"
-    rng = random.Random(f"{city_label}-{date.today().isoformat()}") if stable else random.SystemRandom()
-
-    if sky and any(k in sky.lower() for k in SEVERE_WORDS):
-        return "Best bet: stay indoors and keep an eye on the radar."
-    if _is_rainy(sky):
-        return "Aw shoot — " + rng.choice(INDOOR_SUGG)
-    if any(k in (sky or "").lower() for k in ["sunny", "clear"]):
-        return rng.choice(OUTDOOR_SUGG)
-    return rng.choice(NEUTRAL_SUGG)
-
-
-def in_season(d: date) -> bool:
-    """
-    Check if a date falls within the Chicago sailing season (Memorial Day to Labor Day).
-
-    Args:
-        d: Date to check
-
-    Returns:
-        True if date is in season, False otherwise
-    """
-    last_may_day = max(day for day in range(31, 24, -1) if date(d.year, 5, day).weekday() == calendar.MONDAY)
-    memorial_day = date(d.year, 5, last_may_day)
-    first_sept_monday = next(day for day in range(1, 8) if date(d.year, 9, day).weekday() == calendar.MONDAY)
-    labor_day = date(d.year, 9, first_sept_monday)
-    return memorial_day <= d <= labor_day
-
-
-def _resolve_city_selection(args: argparse.Namespace, unknown: List[str]) -> List[str]:
-    """
-    Resolve which cities to include based on command-line arguments.
-
-    Priority order:
-    1. --only flag (comma-separated list)
-    2. Unknown flags like --miami or legacy flags like --chicago
-    3. --all-cities flag
-    4. Default cities
-
-    Args:
-        args: Parsed command-line arguments
-        unknown: List of unknown arguments
-
-    Returns:
-        List of city keys to process
-    """
-    # Priority: --only > unknown --<key> flags & legacy flags > --all-cities > default
-    if args.only:
-        sel = [k.strip().lower() for k in args.only.split(",") if k.strip()]
-        valid_cities = [k for k in sel if k in CITIES]
-        if valid_cities:
-            return valid_cities
-        # If no valid cities found, warn and use defaults
-        invalid = [k for k in sel if k not in CITIES]
-        if invalid:
-            print(f"[warn] Invalid city keys ignored: {', '.join(invalid)}", file=sys.stderr)
-        return DEFAULT_KEYS.copy()
-
-    # unknown flags like --miami
-    unk_keys = []
-    for u in unknown:
-        if u.startswith("--") and len(u) > 2 and "=" not in u:
-            key = u[2:].lower().replace("-", "")
-            if key in CITIES:
-                unk_keys.append(key)
-
-    legacy = []
-    if args.chicago:
-        legacy.append("chicago")
-    if args.nyc:
-        legacy.append("nyc")
-    if args.philly:
-        legacy.append("philly")
-    if args.kc:
-        legacy.append("kc")
-    if args.slc:
-        legacy.append("slc")
-
-    candidates = list(dict.fromkeys(unk_keys + legacy))  # preserve order
-    if args.all_cities:
-        return list(CITIES.keys())
-    if candidates:
-        return candidates
-    return DEFAULT_KEYS.copy()
-
-
-def main() -> int:
-    """
-    Main CLI entry point for sailing conditions forecast tool.
-
-    Returns:
-        Exit code (0 for success, non-zero for errors)
-    """
     parser = argparse.ArgumentParser(
-        description="Multi-city Sailing Quick Hits",
+        prog="sail",
+        description="Is it worth going sailing? Hourly NWS data, scored for your boat.",
+        epilog=(
+            "examples:\n"
+            "  sail now chicago\n"
+            "  sail week sfbay --profile dinghy --explain\n"
+            "  sail compare chicago milwaukee cleveland --days 3\n"
+            "  sail watch --dry-run\n"
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  %(prog)s --today --only chicago --slack
-  %(prog)s --tomorrow --all-cities --email
-  %(prog)s --weekend --miami --nyc
-  %(prog)s --week --chicago --format json
-  %(prog)s --today --chicago --verbose
-  %(prog)s --alert-add --city chicago --min-rating 8
-  %(prog)s --alert-list
-  %(prog)s --all
-        """,
+    )
+    parser.add_argument("--version", action="version", version=f"sailing-conditions {PACKAGE_VERSION}")
+    subs = parser.add_subparsers(dest="command")
+
+    now = subs.add_parser("now", parents=[common], help="today's window, plus live buoy conditions")
+    now.set_defaults(func=cmd_now, days=1)
+
+    plan = subs.add_parser("plan", parents=[common], help="the next few days at one or more spots")
+    plan.add_argument("-d", "--days", type=int, default=3, help="days to include (1-7, default 3)")
+    plan.set_defaults(func=cmd_plan)
+
+    week = subs.add_parser("week", parents=[common], help="the full seven-day outlook")
+    week.set_defaults(func=cmd_plan, days=7)
+
+    compare = subs.add_parser("compare", parents=[common], help="rank several spots against each other")
+    compare.add_argument("-d", "--days", type=int, default=3, help="days to consider (1-7, default 3)")
+    compare.set_defaults(func=cmd_compare)
+
+    spots = subs.add_parser("spots", help="list known spots")
+    spots.add_argument("--tag", help="only spots carrying this tag")
+    spots.add_argument("--json", action="store_true", help="emit JSON")
+    spots.set_defaults(func=cmd_spots)
+
+    profiles = subs.add_parser("profiles", help="list boat profiles and their wind bands")
+    profiles.set_defaults(func=cmd_profiles)
+
+    watch = subs.add_parser("watch", help="evaluate the watch rules in your config and notify")
+    watch.add_argument("--dry-run", action="store_true", help="evaluate and print, but do not send or persist")
+    watch.add_argument("--no-cache", action="store_true", help="bypass the on-disk HTTP cache")
+    watch.add_argument("-v", "--verbose", action="store_true", help="log what the fetcher is doing")
+    watch.set_defaults(func=cmd_watch)
+
+    return parser
+
+
+def cmd_now(ctx: Context) -> int:
+    """Today only, with live observations if the spot has a buoy."""
+    return _emit(ctx, ctx.reports(days=1))
+
+
+def cmd_plan(ctx: Context) -> int:
+    """A multi-day outlook per spot."""
+    days = max(1, min(MAX_DAYS, int(getattr(ctx.args, "days", 3))))
+    return _emit(ctx, ctx.reports(days=days))
+
+
+def cmd_compare(ctx: Context) -> int:
+    """A leaderboard across spots rather than a panel per spot."""
+    days = max(1, min(MAX_DAYS, int(getattr(ctx.args, "days", 3))))
+    reports = ctx.reports(days=days)
+    if ctx.args.json:
+        ctx.console.print_json(jsonout.dumps(reports, hourly=not ctx.args.compact))
+        return EXIT_OK
+    render_summary(reports, ctx.console)
+    _print_notes(ctx, reports)
+    return EXIT_OK
+
+
+def cmd_spots(ctx: Context) -> int:
+    """List the spot registry."""
+    spots = ctx.registry.tagged(ctx.args.tag) if ctx.args.tag else list(ctx.registry)
+    if getattr(ctx.args, "json", False):
+        ctx.console.print_json(
+            json.dumps(
+                [
+                    {
+                        "key": s.key,
+                        "name": s.name,
+                        "region": s.region,
+                        "lat": s.lat,
+                        "lon": s.lon,
+                        "buoy": s.buoy,
+                        "tags": list(s.tags),
+                    }
+                    for s in spots
+                ]
+            )
+        )
+        return EXIT_OK
+
+    table = Table(title="Sailing spots", box=None, title_style="bold", title_justify="left", header_style="grey62")
+    table.add_column("key", style="bold cyan")
+    table.add_column("name")
+    table.add_column("region", style="grey62")
+    table.add_column("buoy", style="grey62")
+    table.add_column("notes", style="italic grey54")
+    for spot in spots:
+        table.add_row(spot.key, spot.name, spot.region, spot.buoy or "—", spot.blurb)
+    ctx.console.print(table)
+    ctx.console.print(
+        Text("\nAdd your own under [spots] in ~/.config/sailing-conditions/config.toml", style="grey54")
+    )
+    return EXIT_OK
+
+
+def cmd_profiles(ctx: Context) -> int:
+    """List boat profiles and the wind bands that define them."""
+    table = Table(title="Boat profiles", box=None, title_style="bold", title_justify="left", header_style="grey62")
+    table.add_column("key", style="bold cyan")
+    table.add_column("wind (min–ideal–max)")
+    table.add_column("seas ok / max")
+    table.add_column("what it assumes", style="grey62")
+    profiles = {**BUILTIN_PROFILES, **ctx.settings.user_profiles}
+    for key, profile in profiles.items():
+        table.add_row(
+            key,
+            profile.wind.describe(),
+            f"{profile.wave_ok_ft:g} / {profile.wave_max_ft:g} ft",
+            profile.summary,
+        )
+    ctx.console.print(table)
+    return EXIT_OK
+
+
+def cmd_watch(ctx: Context) -> int:
+    """Evaluate configured watch rules and notify on matches."""
+    rules = rules_from_settings(ctx.settings)
+    if not rules:
+        ctx.console.print(
+            Text(
+                "No watch rules configured. Add a [[watch]] block to "
+                f"{ctx.settings.config_path or '~/.config/sailing-conditions/config.toml'}",
+                style="yellow",
+            )
+        )
+        return EXIT_OK
+
+    hits, errors = run_watch(
+        rules,
+        forecaster=ctx.forecaster,
+        registry=ctx.registry,
+        settings=ctx.settings,
+        state=WatchState.load(ctx.settings.state_path),
+        dry_run=ctx.args.dry_run,
     )
 
-    # Day selection (mutually exclusive)
-    day = parser.add_mutually_exclusive_group()
-    day.add_argument("--today", action="store_true", help="Use today's forecast (default)")
-    day.add_argument("--tomorrow", action="store_true", help="Use tomorrow's forecast")
-    day.add_argument("--weekend", action="store_true", help="Use Saturday & Sunday")
-    day.add_argument("--week", action="store_true", help="Show 7-day forecast")
-
-    # Output format
-    parser.add_argument(
-        "--format",
-        choices=["text", "json"],
-        default="text",
-        help="Output format (default: text)",
-    )
-    parser.add_argument("--verbose", "-v", action="store_true", help="Show detailed rating breakdown")
-
-    # Delivery (independent)
-    parser.add_argument("--email", action="store_true", help="Send to Email")
-    parser.add_argument("--slack", action="store_true", help="Send to Slack")
-    parser.add_argument("--all-delivery", action="store_true", help="Send to both Email and Slack")
-    parser.add_argument("--all", action="store_true", help="Alias for both --all-cities and --all-delivery")
-    parser.add_argument("--no-send", action="store_true", help="Don't send, just print output")
-
-    # City selection
-    parser.add_argument("--all-cities", action="store_true", help="Include every city in CITIES")
-    parser.add_argument("--only", type=str, help="Comma list of city keys (e.g., miami,nyc,chicago)")
-    parser.add_argument("--chicago", action="store_true")
-    parser.add_argument("--nyc", action="store_true")
-    parser.add_argument("--philly", action="store_true")
-    parser.add_argument("--kc", action="store_true")
-    parser.add_argument("--slc", action="store_true")
-
-    # Alert management
-    alert_group = parser.add_argument_group("Alert Management")
-    alert_group.add_argument("--alert-add", action="store_true", help="Add a new alert")
-    alert_group.add_argument("--alert-remove", type=str, metavar="ID", help="Remove an alert by ID")
-    alert_group.add_argument("--alert-list", action="store_true", help="List all alerts")
-    alert_group.add_argument("--alert-check", action="store_true", help="Check alerts against current conditions")
-    alert_group.add_argument("--city", type=str, help="City key for alert (with --alert-add)")
-    alert_group.add_argument("--min-rating", type=int, default=7, help="Minimum rating for alert (default: 7)")
-
-    args, unknown = parser.parse_known_args()
-
-    # Handle alert commands
-    if args.alert_list:
-        alerts = list_alerts()
-        print(format_alerts_list(alerts))
-        return 0
-
-    if args.alert_add:
-        if not args.city:
-            print("[error] --city required with --alert-add", file=sys.stderr)
-            return 1
-        if args.city not in CITIES:
-            print(f"[error] Invalid city key: {args.city}", file=sys.stderr)
-            return 1
-        alert = add_alert(
-            city_key=args.city,
-            min_rating=args.min_rating,
-            notify_slack=args.slack or args.all_delivery or True,
-            notify_email=args.email or args.all_delivery,
-        )
-        print(f"[info] Alert created: {alert['id']}")
-        print(f"  City: {args.city}, Min rating: {args.min_rating}")
-        return 0
-
-    if args.alert_remove:
-        if remove_alert(args.alert_remove):
-            print(f"[info] Alert removed: {args.alert_remove}")
-            return 0
-        print(f"[error] Alert not found: {args.alert_remove}", file=sys.stderr)
-        return 1
-
-    # --all means both
-    if args.all:
-        args.all_cities = True
-        args.all_delivery = True
-
-    # Delivery defaults: if nothing specified and not no_send, send both
-    explicit = args.email or args.slack or args.all_delivery or args.no_send
-    send_email_flag = (args.email or args.all_delivery) and not args.no_send
-    send_slack_flag = (args.slack or args.all_delivery) and not args.no_send
-
-    # If no explicit delivery and not no_send, default to both (unless JSON format)
-    if not explicit and args.format != "json":
-        send_email_flag = True
-        send_slack_flag = True
-
-    # Cities
-    sel = _resolve_city_selection(args, unknown)
-
-    # Labels
-    today_dt = date.today()
-    tomorrow_dt = today_dt + timedelta(days=1)
-
-    if args.week:
-        # 7-day forecast mode
-        return _handle_week_forecast(sel, args)
-
-    if args.weekend:
-        delta_to_sat = (5 - today_dt.weekday()) % 7
-        sat_dt = today_dt + timedelta(days=delta_to_sat)
-        sun_dt = sat_dt + timedelta(days=1)
-        labels = ["SATURDAY", "SUNDAY"]
-        label_dates = [sat_dt, sun_dt]
-    elif args.tomorrow:
-        labels = [tomorrow_dt.strftime("%A").upper()]
-        label_dates = [tomorrow_dt]
-    else:
-        labels = ["REST OF TODAY", "TODAY"]
-        label_dates = [today_dt]
-
-    # Chicago season gate
-    if "chicago" in sel and not any(in_season(d) for d in label_dates):
-        if sel == ["chicago"]:
-            print("[info] Chicago out of season; no message sent.")
-            return 0
-        sel = [k for k in sel if k != "chicago"]
-
-    # Build entries
-    entries = []
-    include_details = args.verbose or args.format == "json"
-
-    for key in sel:
-        if key not in CITIES:
-            print(f"[warn] Skipping invalid city key: {key}", file=sys.stderr)
-            continue
-
-        # Choose concrete "today" label that actually exists for marine products
-        if labels == ["REST OF TODAY", "TODAY"]:
-            if CITIES[key]["type"] == "marine":
-                mt = fetch_city_marine_text(CITIES[key].get("marine_zones") or [])
-                use_label = _pick_present_day_label(mt) if mt else "TODAY"
-            else:
-                use_label = "TODAY"
-            entries_labels = [use_label]
-        else:
-            entries_labels = labels
-
-        for lab in entries_labels:
-            try:
-                meta = CITIES[key]
-                if key == "chicago":
-                    e = chicago_forecast(lab, include_details=include_details)
-                elif meta["type"] == "marine":
-                    e = marine_city_forecast(key, lab, include_details=include_details)
-                else:
-                    e = grid_city_forecast(key, lab, include_details=include_details)
-
-                # Add best sailing window for today
-                if lab.upper() in ("TODAY", "REST OF TODAY") and e.get("sailing"):
-                    best_window = find_best_sailing_window(key)
-                    if best_window:
-                        e["best_window"] = best_window
-
-                entries.append(e)
-            except Exception as ex:
-                print(f"[warn] Failed to fetch forecast for {key} ({lab}): {ex}", file=sys.stderr)
-                # Continue with other cities even if one fails
-
-    # Check alerts if requested
-    if args.alert_check:
-        triggered = check_alerts(entries)
-        if triggered:
-            print(f"[info] {len(triggered)} alert(s) triggered")
-        else:
-            print("[info] No alerts triggered")
-
-    # Output based on format
-    if args.format == "json":
-        output = format_json_output(entries)
-        print(output)
-        return 0
-
-    if args.verbose:
-        for e in entries:
-            print(format_verbose_entry(e))
-        return 0
-
-    # Slack text
-    lines = [
-        format_slack_line_city(
-            e["prefix"],
-            e["city"],
-            e["label"],
-            e["rating"],
-            e["wind_line"],
-            e["waves_line"],
-            e["sky_line"],
-            e["sailing"],
-            None if e["sailing"] else pick_suggestion(e["city"], e["sky_line"]),
-            temp_f=e.get("temp_f"),
-            sun=e.get("sun"),
-            best_window=e.get("best_window"),
-        )
-        for e in entries
-    ]
-    slack_text = "\n".join(lines) if lines else "No data."
-
-    # Email - cross-platform date formatting
-    try:
-        # Try Unix-style format first (%-d removes leading zero)
-        date_str = today_dt.strftime("%a %b %-d, %Y")
-    except ValueError:
-        # Windows doesn't support %-d, use %#d or fallback to %d
-        try:
-            date_str = today_dt.strftime("%a %b %#d, %Y")
-        except ValueError:
-            # Final fallback: use %d (may have leading zero)
-            date_str = today_dt.strftime("%a %b %d, %Y")
-    subject = "Sailing Quick Hits — Multi-City"
-    text_fallback = "\n".join(f"{e['prefix']} {e['city']} — {e['quick']}" for e in entries)
-    html = build_email_html(entries, date_str)
-
-    # Send
-    errors = []
-    if send_email_flag:
-        try:
-            send_email_html(subject, html, text_fallback)
-        except Exception as e:
-            errors.append(f"Email send failed: {e}")
-            print(f"[error] Email send failed: {e}", file=sys.stderr)
-
-    if send_slack_flag:
-        try:
-            post_slack(slack_text)
-        except Exception as e:
-            errors.append(f"Slack send failed: {e}")
-            print(f"[error] Slack send failed: {e}", file=sys.stderr)
-
-    # Print once
-    print(slack_text)
-
-    # Return non-zero exit code if there were errors
-    return 1 if errors else 0
+    for hit in hits:
+        prefix = "would notify" if ctx.args.dry_run else "notified"
+        ctx.console.print(Text(f"{prefix}: {hit.headline()}", style=hit.day.verdict.color))
+    if not hits:
+        ctx.console.print(Text(f"Checked {len(rules)} rule(s); nothing worth a message.", style="grey62"))
+    for error in errors:
+        ctx.console.print(Text(f"error: {error}", style="red"), style="red")
+    return EXIT_ERROR if errors else EXIT_OK
 
 
-def _handle_week_forecast(sel: List[str], args: argparse.Namespace) -> int:
-    """
-    Handle 7-day forecast mode.
+def _emit(ctx: Context, reports: list[Report]) -> int:
+    if ctx.args.json:
+        ctx.console.print_json(jsonout.dumps(reports, hourly=not ctx.args.compact))
+        return EXIT_OK
+    for report in reports:
+        render_report(report, ctx.console, explain=ctx.args.explain)
+    return EXIT_OK
+
+
+def _print_notes(ctx: Context, reports: list[Report]) -> None:
+    for report in reports:
+        for note in report.notes:
+            ctx.console.print(Text(f"  {report.spot.key}: {note}", style="grey54"))
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    fetcher: Fetcher | None = None,
+    console: Console | None = None,
+    settings: Settings | None = None,
+) -> int:
+    """Entry point. Returns a process exit code rather than calling ``sys.exit``.
 
     Args:
-        sel: List of city keys
-        args: Parsed arguments
-
-    Returns:
-        Exit code
+        argv: Command-line arguments, defaulting to ``sys.argv[1:]``.
+        fetcher: Injected HTTP layer — the seam the test suite uses.
+        console: Injected Rich console, for capturing output.
+        settings: Injected settings, bypassing the config file.
     """
-    all_entries = []
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if not getattr(args, "func", None):
+        parser.print_help()
+        return EXIT_USAGE
 
-    for key in sel:
-        if key not in CITIES:
-            print(f"[warn] Skipping invalid city key: {key}", file=sys.stderr)
-            continue
+    logging.basicConfig(
+        level=logging.INFO if getattr(args, "verbose", False) else logging.WARNING,
+        format="%(levelname)s %(name)s: %(message)s",
+        stream=sys.stderr,
+    )
 
-        try:
-            entries = week_forecast(key, include_details=args.verbose or args.format == "json")
-            all_entries.extend(entries)
+    try:
+        resolved = settings or Settings.load()
+    except ConfigError as exc:
+        (console or Console(stderr=True)).print(Text(f"config error: {exc}", style="bold red"))
+        return EXIT_ERROR
 
-            if args.format == "text" and not args.verbose:
-                print(format_week_summary(entries, CITIES[key]["label"]))
-        except Exception as ex:
-            print(f"[warn] Failed to fetch week forecast for {key}: {ex}", file=sys.stderr)
+    out = console or Console(no_color=getattr(args, "no_color", False))
+    registry = SpotRegistry().merged(resolved.user_spots)
+    ctx = Context(
+        settings=resolved,
+        registry=registry,
+        forecaster=build_forecaster(
+            resolved,
+            fetcher=fetcher,
+            use_cache=not getattr(args, "no_cache", False),
+            live=not getattr(args, "no_live", False),
+        ),
+        console=out,
+        args=args,
+    )
 
-    if args.format == "json":
-        print(format_json_output(all_entries))
-        return 0
+    try:
+        return int(args.func(ctx))
+    except UnknownSpot as exc:
+        out.print(Text(f"error: {exc}", style="bold red"))
+        return EXIT_USAGE
+    except KeyError as exc:
+        out.print(Text(f"error: {exc.args[0] if exc.args else exc}", style="bold red"))
+        return EXIT_USAGE
+    except KeyboardInterrupt:  # pragma: no cover - interactive only
+        out.print("\ninterrupted")
+        return EXIT_ERROR
+    except Exception as exc:
+        out.print(Text(f"error: {exc}", style="bold red"))
+        if getattr(args, "verbose", False):
+            out.print_exception()
+        return EXIT_ERROR
 
-    if args.verbose:
-        for e in all_entries:
-            print(format_verbose_entry(e))
 
-    return 0
+def run() -> None:
+    """Console-script shim that translates the return code into an exit."""
+    raise SystemExit(main())
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    run()

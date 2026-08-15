@@ -1,55 +1,78 @@
-"""sailing_conditions – multi-city sailing forecast CLI."""
-from __future__ import annotations
+"""sailing-conditions — hourly sailing forecasts, scored for your boat.
 
-from .cities import CITIES
-from .cli import main
-from .emoji import pick_weather_emoji
-from .forecast import (
-    chicago_forecast,
-    find_best_sailing_window,
-    grid_city_forecast,
-    marine_city_forecast,
-    week_forecast,
+    from sailing_conditions import Settings, SpotRegistry, build_forecaster, get_profile
+
+    forecaster = build_forecaster(Settings.load())
+    report = forecaster.report(SpotRegistry().get("chicago"), get_profile("keelboat"), days=2)
+    print(report.headline())
+    # Belmont Harbor 8.9/10 — SEND IT. Best 12pm–7pm, S 9 kt g13.
+
+The package is layered so each piece can be used on its own:
+
+``sources``  network clients (NWS grid, NDBC buoys) behind one protocol
+``models``   frozen domain types, no I/O
+``scoring``  the response curves and vetoes that turn conditions into a score
+``windows``  window search over scored hours
+``service``  wiring: fetch, score, group, assemble
+``render``   console, JSON, Slack, HTML — all pure functions of a report
+``notify``   delivery channels
+``watch``    standing rules, evaluated on a schedule
+"""
+
+from .models import (
+    DayOutlook,
+    Factor,
+    Hazard,
+    Hour,
+    Observation,
+    Report,
+    Score,
+    ScoredHour,
+    Spot,
+    SunTimes,
+    Verdict,
+    Veto,
+    Window,
 )
-from .formatters import (
-    build_email_html,
-    format_json_output,
-    format_slack_line_city,
-    format_verbose_entry,
-    format_week_summary,
-)
-from .parsers import compute_rating, compute_rating_breakdown, parse_sky, parse_waves, parse_wind
-from .senders import post_slack, send_email_html
-from .alerts import add_alert, check_alerts, list_alerts, remove_alert
+from .profiles import BUILTIN_PROFILES, BoatProfile, WindBand, get_profile
+from .scoring import score_hour, score_hours
+from .service import Forecaster, build_fetcher, build_forecaster
+from .settings import PACKAGE_VERSION, Settings
+from .spots import SpotRegistry, UnknownSpot, builtin_spots
+from .sun import sun_times
+from .windows import find_windows, sparkline
+
+__version__ = PACKAGE_VERSION
 
 __all__ = [
-    "CITIES",
-    "main",
-    # Forecast functions
-    "chicago_forecast",
-    "marine_city_forecast",
-    "grid_city_forecast",
-    "week_forecast",
-    "find_best_sailing_window",
-    # Parsers
-    "parse_wind",
-    "parse_waves",
-    "parse_sky",
-    "compute_rating",
-    "compute_rating_breakdown",
-    # Formatting
-    "pick_weather_emoji",
-    "format_slack_line_city",
-    "format_json_output",
-    "format_verbose_entry",
-    "format_week_summary",
-    "build_email_html",
-    # Senders
-    "post_slack",
-    "send_email_html",
-    # Alerts
-    "add_alert",
-    "remove_alert",
-    "list_alerts",
-    "check_alerts",
+    "BUILTIN_PROFILES",
+    "BoatProfile",
+    "DayOutlook",
+    "Factor",
+    "Forecaster",
+    "Hazard",
+    "Hour",
+    "Observation",
+    "Report",
+    "Score",
+    "ScoredHour",
+    "Settings",
+    "Spot",
+    "SpotRegistry",
+    "SunTimes",
+    "UnknownSpot",
+    "Verdict",
+    "Veto",
+    "WindBand",
+    "Window",
+    "__version__",
+    "build_fetcher",
+    "build_forecaster",
+    "builtin_spots",
+    "find_windows",
+    "get_profile",
+    "score_hour",
+    "score_hours",
+    "sparkline",
+    "sun_times",
 ]

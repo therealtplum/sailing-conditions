@@ -1,302 +1,394 @@
-# Sailing Conditions
+# ⛵ sailing-conditions
 
-⛵ A lightweight Python package for quick sailing condition summaries across multiple cities.
+**Is it worth going sailing?** A command-line forecast that answers the question a
+weather app won't: not *"what is the weather"*, but *"when today is it worth rigging
+the boat, for **my** boat?"*
 
-## Features
+It pulls NOAA's hourly forecast grid, scores every hour against a boat profile with a
+transparent model, and searches for the contiguous **windows** worth sailing. It can
+also watch your home water and message you when a good one shows up.
 
-- Pulls forecasts from NWS (grid + marine)
-- Simple 1–10 sailing rating based on wind, waves, and weather
-- **JSON output** for integrations and automation
-- **7-day forecasts** for planning ahead
-- **Temperature display** in both Fahrenheit and Celsius
-- **Verbose mode** with detailed rating breakdowns
-- **Best sailing window** finder (optimal hours)
-- **Sunrise/sunset times** for each city
-- **Alert notifications** for favorable conditions
-- Outputs to Slack or email
-- Extensible city list (20+ cities supported)
-- Retry logic with exponential backoff for network requests
-- Cross-platform support
-- Comprehensive test suite (225 tests)
+[![CI](https://github.com/therealtplum/sailing-conditions/actions/workflows/ci.yml/badge.svg)](https://github.com/therealtplum/sailing-conditions/actions/workflows/ci.yml)
+![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
+![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
-## Requirements
+```console
+$ sail plan chicago --days 1 --explain
 
-- Python 3.10+
-- `requests` library
+⛵ Belmont Harbor  Chicago, IL   keelboat profile
+   Lake Michigan. Flat in an offshore westerly, short and steep in a NE blow.
+   buoy CHII2: S 4 kt g4 (24 min ago)
 
-## Installation
+╭─ Today  8.5/10 SEND IT ────────────────────────────────────────────────────────────────────╮
+│ ▂ ▂ ▂ ▂ ▂ ▂ ▇ ▇ ▇ ▆ ▆ ▅ ▅ ▂                                                                │
+│ 6am   9am   12pm  3pm   6pm                                                                │
+│ go    12pm–5pm  ·  5h at 8.0/10                                                            │
+│ peak  SSE 10 kt g15  ·  2.0 ft seas  ·  feels 76°F  ·  likely rain showers  ·  55% precip  │
+│ sun   5:59am – 7:51pm  (13.9 h of daylight)                                                │
+│                                                                                            │
+│ why 9.0/10 at 12pm                                                                         │
+│ factor   score  weight  reading                                                            │
+│ wind      1.00       3  in the groove — 10 kt sits in the 10–20 kt band                    │
+│ gust      0.84       1  puffy — gusting 5 kt over (1.50x, past 1.35x)                      │
+│ sea       1.00     1.5  manageable — 2.0 ft, at or under 3 ft                              │
+│ precip    0.61       1  wet — 55% chance of precipitation                                  │
+│ comfort   1.00     0.8  pleasant — feels like 76°F                                         │
+│ sky       0.62     0.4  likely rain showers — 94% cloud                                    │
+╰────────────────────────────────────────────────────────────────────────────────────────────╯
+```
+
+Comparing spots:
+
+```console
+$ sail compare chicago milwaukee sfbay newport miami --days 3
+
+Sailing outlook
+ spot             day       score  verdict  window    shape
+ Newport          Tomorrow    9.9  SEND IT  1pm–9pm   ▂▂▂▂▂▂▄▇███████
+ Berkeley Circle  Today       9.8  SEND IT  6am–9pm   ▆▆▆▆▆▇█████████
+ Milwaukee        Tomorrow    9.7  SEND IT  9am–9pm   ▁▂▄▅▆▆▇▇███▇▇▆▆
+ Belmont Harbor   Tomorrow    8.9  SEND IT  8am–9pm   ▁▁▆▇▇▇▇▇▇▇▇▇▇▆▆
+ Biscayne Bay     Today       8.9  SEND IT  7am–11am  ▇▇▆▆▅▅▆▆▆▆▆▆▆▇
+```
+
+---
+
+## Install
+
+Python 3.11 or newer.
 
 ```bash
-# Using uv (recommended)
-uv venv .venv
-source .venv/bin/activate
+git clone https://github.com/therealtplum/sailing-conditions
+cd sailing-conditions
+uv venv && source .venv/bin/activate
 uv pip install -e ".[dev]"
-
-# Or using pip
-pip install -e ".[dev]"
 ```
 
-## Usage
-
-### Basic Examples
+NOAA asks API clients to identify themselves. Set a contact address once:
 
 ```bash
-# Today's forecast for Chicago, send to Slack
-python -m sailing_conditions.cli --today --only chicago --slack
-
-# Tomorrow's forecast for multiple cities, send to email
-python -m sailing_conditions.cli --tomorrow --only miami,nyc,sf --email
-
-# Weekend forecast for all cities, send to both Slack and email
-python -m sailing_conditions.cli --weekend --all-cities --all-delivery
-
-# Use legacy flags
-python -m sailing_conditions.cli --today --chicago --nyc --slack
-
-# Use city flags directly
-python -m sailing_conditions.cli --today --miami --boston
+export SAILING_CONTACT="you@example.com"
 ```
 
-### New Features
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `sail now [spots…]` | Today's windows plus live buoy conditions |
+| `sail plan [spots…] -d 3` | The next few days, one panel per day |
+| `sail week [spots…]` | The full seven-day outlook |
+| `sail compare [spots…]` | One line per spot, ranked — where should I drive to? |
+| `sail spots [--tag great-lakes]` | The spot registry |
+| `sail profiles` | Boat profiles and their wind bands |
+| `sail watch [--dry-run]` | Evaluate your watch rules and notify |
+
+Useful flags: `--profile dinghy`, `--explain`, `--json` (add `--compact` to drop the
+hour-by-hour detail), `--min-score 7.5`, `--no-live`, `--no-cache`, `--no-color`.
 
 ```bash
-# JSON output for automation
-python -m sailing_conditions.cli --today --only chicago --format json
-
-# 7-day forecast
-python -m sailing_conditions.cli --week --only chicago
-
-# Verbose mode with rating breakdown
-python -m sailing_conditions.cli --today --only chicago --verbose
-
-# JSON + week forecast
-python -m sailing_conditions.cli --week --only chicago --format json
+sail now chicago --profile dinghy --explain
+sail week sfbay --json | jq '.reports[0].days[] | {date, score}'
+sail compare chicago milwaukee cleveland -d 5
 ```
 
-### Alert Notifications
+## How the score works
 
-Set up proactive alerts for favorable sailing conditions:
+Each hour gets a score from 0 to 10 in two stages.
 
-```bash
-# Add an alert (notify when rating >= 7)
-python -m sailing_conditions.cli --alert-add --city chicago --min-rating 7 --slack
+### 1. A weighted geometric mean of continuous factors
 
-# Add an alert with email notification
-python -m sailing_conditions.cli --alert-add --city miami --min-rating 8 --email
+Every factor maps a physical quantity onto `[0, 1]` through a response curve whose
+breakpoints come from your boat profile. Wind is a trapezoid — too little is as
+useless as too much:
 
-# List all alerts
-python -m sailing_conditions.cli --alert-list
-
-# Check alerts against current conditions
-python -m sailing_conditions.cli --alert-check --only chicago
-
-# Remove an alert
-python -m sailing_conditions.cli --alert-remove alert_20250107143022
+```
+ 1.0 │        ┌───────────────┐            keelboat: 5 / 10 / 20 / 30 kt
+     │       ╱                 ╲
+ 0.5 │      ╱                   ╲
+     │     ╱                     ╲
+ 0.0 │────┘                       └────
+     └────┬────┬────┬────┬────┬────┬────
+          5   10   15   20   25   30  kt
 ```
 
-### Programmatic Usage
+| Factor | Reads | Default weight | Response |
+| --- | --- | --- | --- |
+| `wind` | sustained wind | 3.0 | trapezoid across the profile's band |
+| `sea` | wave height | 1.5 | 1.0 up to the comfort limit, falling to the max |
+| `gust` | gust ÷ sustained | 1.0 | ratio-based — 12 kt gusting 30 is harder than a steady 25 |
+| `precip` | probability of precipitation | 1.0 | linear, floored (rain is annoying, not disqualifying) |
+| `comfort` | apparent temperature | 0.8 | trapezoid across a comfortable band |
+| `sky` | cloud cover | 0.4 | mild preference for sunshine |
 
-```python
-from sailing_conditions import (
-    chicago_forecast,
-    marine_city_forecast,
-    grid_city_forecast,
-    week_forecast,
-    find_best_sailing_window,
-    compute_rating_breakdown,
-    parse_wind,
-    CITIES,
-    # Alerts
-    add_alert,
-    check_alerts,
-    list_alerts,
-)
+They combine as a weighted geometric mean:
 
-# Get Chicago forecast with detailed breakdown
-forecast = chicago_forecast("TODAY", include_details=True)
-print(f"Rating: {forecast['rating']}/10")
-print(f"Wind: {forecast['wind_line']}")
-print(f"Waves: {forecast['waves_line']}")
-print(f"Temperature: {forecast.get('temp_f')}°F")
-print(f"Sunrise: {forecast['sun']['sunrise']}")
+$$S = 10 \cdot \Bigl(\prod_i f_i^{\,w_i}\Bigr)^{1/\sum_i w_i}$$
 
-# Rating breakdown
-if forecast.get('rating_breakdown'):
-    rb = forecast['rating_breakdown']
-    print(f"Base: {rb['base']}, Wind adj: {rb['wind_adj']}, Final: {rb['final']}")
+A geometric mean, not an average, because sailing quality is **conjunctive**:
+brilliant sunshine does not compensate for no wind. Any single bad factor drags the
+result toward zero, which is what a sailor expects — while an arithmetic mean would
+happily call a windless, sunny, warm day an 8.
 
-# Get 7-day forecast
-week = week_forecast("chicago")
-for day in week:
-    print(f"{day['label']}: {day['rating']}/10")
+**Missing data is dropped from both the product and the weight sum.** An inland lake
+with no wave grid is scored on what is known rather than penalized for what is not.
 
-# Find best sailing window for today
-best = find_best_sailing_window("chicago")
-if best:
-    print(f"Best window: {best['start_time']}–{best['end_time']} (avg {best['avg_rating']}/10)")
+### 2. Hard vetoes
 
-# Set up alerts programmatically
-alert = add_alert("miami", min_rating=8, notify_slack=True)
-triggered = check_alerts([forecast])
+Some conditions aren't trade-offs at all. These cap the score outright:
+
+| Veto | Cap | Hard? |
+| --- | --- | --- |
+| Probability of thunder over the profile's threshold | 1.0 | yes — no-go |
+| Wind at or past the boat's maximum | 2.5 | yes |
+| Gale / Storm / Special Marine Warning, severe thunderstorm or tornado | 1.0 | yes |
+| Small Craft Advisory and similar | 4.5 | no — your call |
+| Seas past the profile's limit | 3.0 | no — your call |
+
+Vetoes are applied *after* the mean, so `--explain` can still say "9/10 conditions,
+capped by a Special Marine Warning" — much more useful than a bare 1.0.
+
+### 3. Window search
+
+The day score is the mean of its **best three daylight hours**: one dead morning
+shouldn't erase a glorious afternoon, and one flukey hour shouldn't carry the day.
+Windows are maximal runs of consecutive hours at or above the threshold, ranked by
+mean score — every qualifying hour in a row, never a subset chosen to flatter the
+average. Hours whose midpoint falls after sunset are excluded.
+
+### Boat profiles
+
+The rules are the same for everybody; the constants are data. The same Chicago
+afternoon — 10 kt gusting 15, 2 ft of chop — scored three ways:
+
+```console
+$ sail now chicago --profile beginner    →  8.2/10  GO SAILING
+$ sail now chicago --profile keelboat    →  8.5/10  SEND IT
+$ sail now chicago --profile heavy_air   →  1.9/10  NO-GO
 ```
 
-### Command-Line Options
+The heavy-air sailor is right to stay home: 10 kt is *under* that profile's 10 kt
+floor. Nobody is wrong, they just own different boats.
 
-**Day Selection (mutually exclusive):**
-- `--today` - Use today's forecast (default)
-- `--tomorrow` - Use tomorrow's forecast
-- `--weekend` - Use Saturday & Sunday
-- `--week` - Show 7-day forecast
+| Profile | Wind band (min–ideal–max) | Seas ok/max |
+| --- | --- | --- |
+| `keelboat` | 5 – 10–20 – 30 kt | 3.0 / 5.5 ft |
+| `dinghy` | 4 – 8–16 – 24 kt | 1.5 / 3.5 ft |
+| `catamaran` | 6 – 11–22 – 32 kt | 2.0 / 4.0 ft |
+| `cruiser` | 5 – 9–16 – 24 kt | 2.0 / 4.0 ft |
+| `beginner` | 3 – 6–12 – 18 kt | 1.0 / 2.5 ft |
+| `heavy_air` | 10 – 16–28 – 40 kt | 4.5 / 9.0 ft |
+| `foiler` | 8 – 12–22 – 30 kt | 1.2 / 3.0 ft |
 
-**Output Format:**
-- `--format text` - Human-readable text (default)
-- `--format json` - JSON output for automation
-- `--verbose`, `-v` - Show detailed rating breakdown
+These are rules of thumb, meant to be argued with. Override them in your config.
 
-**City Selection:**
-- `--only CITY1,CITY2` - Comma-separated list of city keys
-- `--all-cities` - Include every city in the registry
-- `--chicago`, `--nyc`, `--philly`, `--kc`, `--slc` - Legacy flags
-- `--CITYKEY` - Direct city flags (e.g., `--miami`, `--boston`)
+## Where the data comes from
 
-**Delivery:**
-- `--email` - Send to email
-- `--slack` - Send to Slack
-- `--all-delivery` - Send to both email and Slack
-- `--all` - Alias for both `--all-cities` and `--all-delivery`
-- `--no-send` - Don't send, just print output
+| Source | Endpoint | What it provides |
+| --- | --- | --- |
+| NWS gridpoints | `/gridpoints/{office}/{x},{y}` | hourly wind, gusts, direction, wave height, thunder and precipitation probability, sky cover, apparent temperature |
+| NWS points | `/points/{lat},{lon}` | grid coordinates and the authoritative IANA timezone |
+| NWS alerts | `/alerts/active?point=` | live watches, warnings and advisories |
+| NDBC | `realtime2/{station}.txt` | live buoy observations — wind, gusts, seas, water temperature |
+| Local | NOAA solar algorithm | sunrise, sunset and solar noon |
 
-**Alert Management:**
-- `--alert-add` - Add a new alert
-- `--alert-remove ID` - Remove an alert by ID
-- `--alert-list` - List all configured alerts
-- `--alert-check` - Check alerts against current conditions
-- `--city KEY` - City key for alert (with --alert-add)
-- `--min-rating N` - Minimum rating to trigger alert (default: 7)
+Two things worth calling out:
 
-**Default Behavior:**
-- If no delivery method specified, sends to both email and Slack
-- If no cities specified, uses default cities: chicago, philly, kc, slc, nyc
+**The quantitative grid, not the prose.** NWS generates sentences like *"west wind 10
+to 15 mph"* from a numeric grid, and publishes both. This reads the grid: typed values
+with declared units, at hourly resolution, including elements the prose never mentions
+(probability of thunder, gust spread, apparent temperature). Conversion is driven by
+the declared unit and an unrecognized unit **raises** rather than silently passing a
+1.6× error downstream.
+
+**The buoy is the reality check.** When forecast and observation disagree materially,
+the report says so:
+
+```
+· Buoy CHII2 reads 22 kt against a 9 kt forecast (+13 kt) — trust the water.
+```
+
+Responses are cached on disk with per-endpoint TTLs (30 days for grid metadata, 30
+minutes for forecasts, 5 minutes for alerts), retried with exponential backoff and
+jitter, and sent with an identifying User-Agent — NOAA's API is free and it is worth
+being a good citizen on it.
 
 ## Configuration
 
-### Environment Variables
+`~/.config/sailing-conditions/config.toml` (override with `SAILING_CONFIG`). See
+[`config.example.toml`](config.example.toml).
 
-**Email (SMTP):**
-- `SMTP_HOST` - SMTP server hostname
-- `SMTP_PORT` - SMTP port (465 for SSL, 587 for STARTTLS)
-- `SMTP_USER` - SMTP username (optional)
-- `SMTP_PASS` - SMTP password (optional)
-- `EMAIL_FROM` - Sender email address
-- `EMAIL_TO` - Recipient email(s), comma or semicolon separated
+```toml
+[defaults]
+profile = "keelboat"
+spots = ["chicago"]
+min_score = 6.5
 
-**Slack:**
-- `SLACK_WEBHOOK_URL` - Incoming webhook URL (preferred), OR
-- `SLACK_BOT_TOKEN` - Bot token
-- `SLACK_CHANNEL` - Channel ID or name
+# Your home water — same schema as the built-ins.
+[spots.myclub]
+name = "Columbia YC"
+region = "Chicago, IL"
+lat = 41.867
+lon = -87.606
+buoy = "CHII2"
 
-**Other:**
-- `SUGGESTION_MODE=stable` - Use deterministic suggestions (for testing)
-- `SAILING_CONDITIONS_CONTACT` - Contact email for NWS API User-Agent header
-- `SAILING_CONDITIONS_ALERTS_FILE` - Custom path for alerts storage (default: ~/.sailing-conditions-alerts.json)
+# Your boat. Anything you leave out is inherited from `extends`.
+[profiles.my_j24]
+extends = "keelboat"
+name = "My J/24"
+wind = { min = 6, ideal_lo = 11, ideal_hi = 22, max = 30 }
+wave_max_ft = 4.5
 
-### Supported Cities
-
-The package supports 20+ cities including:
-- **Sailing cities:** Chicago, NYC, Miami, Fort Lauderdale, Tampa Bay, LA, San Diego, San Francisco, Seattle, Boston, Newport, Annapolis, Portland (ME), Charleston, New Orleans, Cleveland, Milwaukee, Austin
-- **Non-sailing cities:** Philadelphia, Kansas City, Salt Lake City, Minneapolis
-
-See `sailing_conditions/cities.py` for the full list and to add more.
-
-## Rating System
-
-The 1–10 rating is computed based on:
-- **Wind speed:** Optimal range is 9–18 knots
-- **Wave height:** Optimal range is 1–3 feet
-- **Weather:** Sunny/clear conditions get a bonus; storms/rain get penalties
-
-### Rating Breakdown (Verbose Mode)
-
-Use `--verbose` to see how the rating is calculated:
-
-```
-Rating Breakdown:
-  Base score: 10
-  Wind: -1 (light (8kt < 9kt))
-  Waves: 0 (optimal (3ft ≤ 3ft))
-  Sky: +1 (sunny/clear (+1))
-  Raw score: 10 → Final: 10
+# Standing question: "tell me when it's good."
+[[watch]]
+spot = "myclub"
+profile = "my_j24"
+min_score = 7.5
+min_hours = 3
+days = 4
+channels = ["slack"]
+cooldown_hours = 20
 ```
 
-## JSON Output
-
-The `--format json` option outputs structured data:
-
-```json
-{
-  "forecasts": [
-    {
-      "city": "Chicago",
-      "city_key": "chicago",
-      "label": "Today",
-      "date": "2025-01-07",
-      "rating": 8,
-      "wind": "N 10–15 kt",
-      "waves": "2–3 ft",
-      "sky": "Sunny",
-      "sailing": true,
-      "temperature": {"fahrenheit": 75, "celsius": 24},
-      "wind_kt": {"low": 10, "high": 15},
-      "waves_ft": {"low": 2.0, "high": 3.0},
-      "sun": {"sunrise": "6:30am", "sunset": "8:15pm", "daylight_hours": 13.75},
-      "best_window": {"start_time": "10am", "end_time": "2pm", "avg_rating": 8.5}
-    }
-  ],
-  "count": 1
-}
-```
-
-## Development
-
-### Running Tests
+Credentials only ever come from the environment, never the config file:
 
 ```bash
-# Run all tests
-pytest tests/ -v
-
-# Run with coverage
-pytest tests/ --cov=sailing_conditions
+SLACK_WEBHOOK_URL=…            # or SLACK_BOT_TOKEN + SLACK_CHANNEL
+SMTP_HOST= SMTP_PORT= SMTP_USER= SMTP_PASS= EMAIL_FROM= EMAIL_TO=
+SAILING_CONTACT=you@example.com
 ```
 
-### Project Structure
+## Watching for a good day
+
+`sail watch` evaluates every `[[watch]]` rule and notifies on the first day that
+qualifies. It is built to run unattended:
+
+- **It won't spam you.** Each firing is recorded per rule and per forecast date; a
+  forecast wobbling between 7.4 and 7.6 all afternoon produces one message, not fifty.
+- **It won't lie by omission.** A rule that couldn't be evaluated is reported as an
+  error and exits non-zero, rather than being quietly counted as "nothing to report".
+- **A dropped message is retried.** State is only recorded once a channel accepts it.
+
+```bash
+sail watch --dry-run     # see what would be sent
+```
+
+Run it from cron, or from the included GitHub Action
+([`.github/workflows/watch.yml`](.github/workflows/watch.yml)) on a schedule with your
+webhook in repository secrets:
+
+```cron
+0 6,17 * * * SAILING_CONTACT=you@example.com /path/to/.venv/bin/sail watch
+```
+
+## Python API
+
+Every layer is usable on its own, and nothing in the domain touches the network.
+
+```python
+from sailing_conditions import Settings, SpotRegistry, build_forecaster, get_profile
+
+report = build_forecaster(Settings.load()).report(
+    SpotRegistry().get("chicago"), get_profile("dinghy"), days=3
+)
+
+print(report.headline())
+# Belmont Harbor 8.9/10 — SEND IT. Best 12pm–7pm, S 9 kt g13.
+
+for day in report.days:
+    window = day.best_window
+    print(day.date, f"{day.score:.1f}", window.describe() if window else "—")
+```
+
+Scoring is a pure function you can drive with your own data:
+
+```python
+from sailing_conditions import Hour, get_profile, score_hour
+import datetime as dt
+
+hour = Hour(time=dt.datetime.now().astimezone(), wind_kt=14, gust_kt=19, wave_ft=2.0)
+score = score_hour(hour, get_profile("keelboat"))
+
+print(score.value, score.verdict.label)
+for factor in score.factors:
+    print(f"  {factor.name:8} {factor.score:.2f} × {factor.weight}  {factor.note}")
+```
+
+`--json` output carries a `schema_version` and is a deliberate, stable contract —
+scores, verdicts, windows, every factor and every veto.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph sources["sources/ — the only network code"]
+        NWS[NWS grid + alerts]
+        NDBC[NDBC buoys]
+    end
+    NWS --> N["normalize units<br/>expand ragged series"]
+    NDBC --> N
+    N --> H["Hour × N<br/>(kt, ft, °F)"]
+    H --> S["scoring.py<br/>factors + vetoes"]
+    P[profiles.py] --> S
+    S --> W["windows.py<br/>window search"]
+    W --> R[Report]
+    R --> C[console]
+    R --> J[JSON]
+    R --> SL[Slack]
+    R --> E[email]
+    R --> WA[watch rules]
+```
 
 ```
 sailing_conditions/
-├── __init__.py      # Public API exports
-├── alerts.py        # Alert notification system
-├── cli.py           # Command-line interface
-├── cities.py        # City registry
-├── config.py        # Configuration constants
-├── emoji.py         # Weather emoji selection
-├── fetchers.py      # Network requests (NWS, NDBC, sun times)
-├── forecast.py      # Forecast generation logic
-├── formatters.py    # Output formatting (Slack, HTML, JSON, verbose)
-├── parsers.py       # Text parsing (wind, waves, sky, rating breakdown)
-└── senders.py       # Email and Slack delivery
-
-tests/
-├── test_cities.py
-├── test_cli.py
-├── test_config.py
-├── test_emoji.py
-├── test_fetchers.py
-├── test_forecast.py
-├── test_formatters.py
-├── test_new_features.py  # JSON, week, verbose, alerts tests
-├── test_parsers.py
-└── test_senders.py
+├── models.py       frozen domain types — no I/O, no formatting
+├── scoring.py      response curves, vetoes, the weighted geometric mean
+├── profiles.py     boat profiles: the constants the model is tuned by
+├── windows.py      window search and sparklines
+├── sun.py          NOAA solar position, timezone-correct
+├── spots.py        spot registry (data/spots.toml + your config)
+├── settings.py     TOML preferences, environment secrets
+├── service.py      wiring: fetch → score → group → assemble
+├── watch.py        standing rules, cooldown state, delivery
+├── cli.py          argument parsing and command dispatch
+├── sources/        http (retry + cache), nws, ndbc
+├── render/         console, jsonout, slack, html — pure functions of a Report
+└── notify/         Slack and SMTP, each with an injectable transport
 ```
+
+The seam that makes this testable is the `Fetcher` protocol: two methods,
+`get_text` and `get_json`. Production passes an HTTP client; the test suite passes one
+backed by recorded NOAA payloads, so **the entire suite runs the real code paths
+offline** — no network, no mocking library.
+
+## Development
+
+```bash
+pytest                                   # 245 tests, no network
+pytest --cov=sailing_conditions           # ~94% coverage
+ruff check . && mypy sailing_conditions   # lint + strict types
+python tools/capture_fixtures.py --contact you@example.com   # re-record fixtures
+```
+
+Sun calculations are verified against NOAA's algorithm (as implemented by `astral`)
+and published almanac times across latitudes from Key West to Longyearbyen, to within
+90 seconds. Scoring tests assert *properties* — more wind up to the sweet spot is
+better, missing data is not a penalty, a veto beats everything — rather than pinning
+magic numbers, so the model stays tunable.
+
+## Limitations
+
+- **US only.** It is built on NOAA/NWS, which covers the United States and its
+  territories.
+- **A score is not a forecast, and neither is a substitute for judgment.** Check the
+  official marine forecast and your own eyes before leaving the dock. Grid forecasts
+  smooth over local effects — lake breezes, harbor shadows, current against wind —
+  that matter enormously in the last mile.
+- **Wave data is coarse or absent** at inland and some coastal grids. The report says
+  so rather than silently pretending otherwise.
+- Model skill decays with range: day 1 is worth planning around, day 7 is worth a
+  glance.
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file.
+MIT — see [LICENSE](LICENSE). Forecast data courtesy of NOAA's National Weather
+Service and National Data Buoy Center, which are public domain.

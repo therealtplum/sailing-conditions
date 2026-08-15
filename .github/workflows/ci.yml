@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install
+        run: uv pip install --system -e ".[dev]"
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Type check
+        run: mypy sailing_conditions
+
+      # The suite runs against recorded NOAA payloads, so CI never touches the
+      # network — no flaky builds when api.weather.gov has a bad afternoon.
+      - name: Test
+        run: pytest --cov=sailing_conditions --cov-report=term-missing --cov-fail-under=90
+
+  smoke:
+    name: Live API smoke test
+    runs-on: ubuntu-latest
+    # Fixtures can go stale silently when NOAA changes a payload. This job
+    # hits the real API once a day so we find out from CI, not from a user.
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv pip install --system -e .
+      - name: Fetch a real forecast
+        env:
+          SAILING_CONTACT: ${{ secrets.SAILING_CONTACT || 'ci@example.com' }}
+        run: sail now chicago --json --compact --no-cache

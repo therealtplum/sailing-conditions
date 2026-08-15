@@ -1,0 +1,50 @@
+name: Sailing watch
+
+# Evaluates the [[watch]] rules in watch-config.toml and messages you when a
+# good window shows up. Fork-and-go: add SLACK_WEBHOOK_URL to repository
+# secrets, commit your own watch-config.toml, and adjust the schedule.
+on:
+  schedule:
+    - cron: "0 11 * * *"   # 6am Central, in time to plan the day
+    - cron: "0 22 * * 4"   # Thursday evening, in time to plan the weekend
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Evaluate rules without sending anything"
+        type: boolean
+        default: true
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - run: uv pip install --system -e .
+
+      # Cooldown state lives in the Actions cache: without it every scheduled
+      # run would re-announce the same Saturday.
+      - name: Restore watch state
+        uses: actions/cache@v4
+        with:
+          path: .watch-state
+          key: watch-state-${{ github.run_id }}
+          restore-keys: watch-state-
+
+      - name: Check the forecast
+        env:
+          SAILING_CONFIG: watch-config.toml
+          SAILING_STATE_FILE: .watch-state/state.json
+          SAILING_CONTACT: ${{ secrets.SAILING_CONTACT }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        run: sail watch ${{ inputs.dry_run && '--dry-run' || '' }}
