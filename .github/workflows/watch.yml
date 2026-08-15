@@ -18,18 +18,20 @@ jobs:
   watch:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10
         with:
           enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
 
-      - run: uv pip install --system -e .
+      - run: uv venv --python 3.12
+      - run: uv pip install -e .
 
       # Cooldown state lives in the Actions cache: without it every scheduled
       # run would re-announce the same Saturday.
       - name: Restore watch state
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .watch-state
           key: watch-state-${{ github.run_id }}
@@ -47,4 +49,4 @@ jobs:
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
-        run: sail watch ${{ inputs.dry_run && '--dry-run' || '' }}
+        run: uv run sail watch ${{ inputs.dry_run && '--dry-run' || '' }}

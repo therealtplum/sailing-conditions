@@ -15,13 +15,13 @@ from __future__ import annotations
 import datetime as dt
 import math
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 from .timefmt import hour_label
 from .units import beaufort, beaufort_label, compass, gust_ratio
 
 
-class Verdict(str, Enum):
+class Verdict(StrEnum):
     """Plain-language bucket for a score. Ordered worst to best."""
 
     NO_GO = "no_go"

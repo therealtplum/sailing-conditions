@@ -20,42 +20,52 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v10
         with:
           enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
 
-      - name: Set up Python ${{ matrix.python-version }}
-        run: uv python install ${{ matrix.python-version }}
+      # A venv per matrix entry: the runner's own Python is Debian-managed,
+      # and installing into it would both fail and test the wrong version.
+      - name: Create the environment
+        run: uv venv --python ${{ matrix.python-version }}
 
       - name: Install
-        run: uv pip install --system -e ".[dev]"
+        run: uv pip install -e ".[dev]"
+
+      - name: Confirm the interpreter under test
+        run: uv run python -c "import sys; print(sys.version)"
 
       - name: Lint
-        run: ruff check .
+        run: uv run ruff check .
 
       - name: Type check
-        run: mypy sailing_conditions
+        run: uv run mypy sailing_conditions
 
       # The suite runs against recorded NOAA payloads, so CI never touches the
       # network — no flaky builds when api.weather.gov has a bad afternoon.
       - name: Test
-        run: pytest --cov=sailing_conditions --cov-report=term-missing --cov-fail-under=90
+        run: uv run pytest --cov=sailing_conditions --cov-report=term-missing --cov-fail-under=90
 
   smoke:
     name: Live API smoke test
     runs-on: ubuntu-latest
     # Fixtures can go stale silently when NOAA changes a payload. This job
-    # hits the real API once a day so we find out from CI, not from a user.
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+    # hits the real API so we find out from CI, not from a user. It is
+    # advisory: a NOAA outage should not fail the build.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - run: uv pip install --system -e .
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+      - run: uv venv --python 3.12
+      - run: uv pip install -e .
       - name: Fetch a real forecast
         env:
           SAILING_CONTACT: ${{ secrets.SAILING_CONTACT || 'ci@example.com' }}
-        run: sail now chicago --json --compact --no-cache
+        run: uv run sail now chicago --json --compact --no-cache

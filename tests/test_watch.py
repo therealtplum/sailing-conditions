@@ -143,6 +143,7 @@ def test_dry_run_neither_sends_nor_persists(forecaster, registry, settings, stat
         dry_run=True,
     )
     assert len(hits) == 1
+    assert errors == []
     assert notifier.sent == []
     assert not state.path.exists()
 
